@@ -221,20 +221,10 @@ Add-Type -AssemblyName System.IO.Compression.FileSystem
 Write-Host "Финальный архив: $finalArchivePath ($([math]::Round((Get-Item $finalArchivePath).Length/1MB, 2)) MB)"
 
 # ============================================================
-# КОПИРУЕМ УСТАНОВЩИК И БАНДЛ В build-bundle ДЛЯ РЕЛИЗА
+# КОПИРУЕМ БАНДЛ В build-bundle ДЛЯ РЕЛИЗА
 # ============================================================
-Write-Host "`n========== КОПИРОВАНИЕ АРТЕФАКТОВ ДЛЯ РЕЛИЗА =========="
-
-# Копируем установщик в build-bundle (если он не там уже)
-if ($installerExe -and (Test-Path -LiteralPath $installerExe)) {
-    $installerReleasePath = Join-Path $BundleDir "Obxod-BOX-Setup-v$newVersion.exe"
-    if (-not (Test-Path -LiteralPath $installerReleasePath) -or (Resolve-Path $installerExe) -ne (Resolve-Path $installerReleasePath)) {
-        Copy-Item -LiteralPath $installerExe -Destination $installerReleasePath -Force
-        Write-Host "Установщик скопирован: $installerReleasePath"
-    } else {
-        Write-Host "Установщик уже в build-bundle: $installerReleasePath"
-    }
-}
+Write-Host "`n========== КОПИРОВАНИЕ БАНДЛА ДЛЯ РЕЛИЗА =========="
+# Установщик уже собирается непосредственно в build-bundle.
 
 # Копируем бандл в build-bundle
 $bundleReleasePath = Join-Path $BundleDir "obxod-box-v$newVersion"

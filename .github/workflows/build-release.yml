@@ -69,15 +69,27 @@ jobs:
       - name: Get latest version from GitHub
         id: version
         run: |
-          $tags = git tag -l "v*" --sort=-v:refname
-          if ($tags.Count -gt 0) {
-            $latestTag = $tags[0]
-            $version = $latestTag.TrimStart('v')
-            Write-Host "Latest tag: $latestTag"
+          $headers = @{
+            Accept = "application/vnd.github+json"
+            "X-GitHub-Api-Version" = "2022-11-28"
+          }
+          $releaseUrl = "https://api.github.com/repos/$env:GITHUB_REPOSITORY/releases/latest"
+          try {
+            $release = Invoke-RestMethod -Uri $releaseUrl -Headers $headers
+            $latestTag = [string]$release.tag_name
+            if ($latestTag -notmatch '^v?(\d+\.\d+\.\d+)$') {
+              throw "Latest GitHub release has an invalid version tag: $latestTag"
+            }
+            $version = $Matches[1]
+            Write-Host "Latest GitHub release: $latestTag"
             Write-Host "Latest version: $version"
-          } else {
-            $version = "0.0.0"
-            Write-Host "No tags found, starting from v$version"
+          } catch {
+            if ($_.Exception.Response -and [int]$_.Exception.Response.StatusCode -eq 404) {
+              $version = "0.0.0"
+              Write-Host "No GitHub releases found, starting from v$version"
+            } else {
+              throw
+            }
           }
           echo "latest_version=$version" >> $env:GITHUB_OUTPUT
 
@@ -90,20 +102,19 @@ jobs:
           NO_INSTALLER: ${{ github.event.inputs.no_installer }}
         run: |
           $latestVersion = $env:LATEST_VERSION
-          $bump = $env:BUMP_TYPE
+          $bump = if ($env:BUMP_TYPE) { $env:BUMP_TYPE } else { "x" }
           $noInstaller = $env:NO_INSTALLER
 
-          $args = @("-BaseVersion $latestVersion")
-          if ($bump) { $args += "-Bump $bump" }
-          if ($noInstaller -eq 'true') { $args += "-NoInstaller" }
+          $buildArgs = @("-BaseVersion", $latestVersion, "-Bump", $bump)
+          if ($noInstaller -eq 'true') { $buildArgs += "-NoInstaller" }
 
           Write-Host "Working directory: $(Get-Location)"
-          Write-Host "Running mkbuild.ps1 with args: $args"
-          & "${{ github.workspace }}\mkbuild.ps1" @args
+          Write-Host "Running mkbuild.ps1 with args: $buildArgs"
+          & "${{ github.workspace }}\mkbuild.ps1" @buildArgs
 
           $p = $latestVersion.Split('.')
           $z = [int]$p[0]; $y = [int]$p[1]; $x = [int]$p[2]
-          switch ($bump.ToLower()) {
+          switch ($bump.ToLowerInvariant()) {
             'z' { $z++; $y = 0; $x = 0 }
             'y' { $y++; $x = 0 }
             'x' { $x++ }
@@ -121,12 +132,17 @@ jobs:
           if ($installer) {
             echo "installer_path=$($installer.FullName)" >> $env:GITHUB_OUTPUT
             Write-Host "Installer: $($installer.FullName)"
+          } elseif ("${{ inputs.no_installer }}" -ne "true") {
+            throw "Installer not found for version $version"
           }
           $bundleDirPath = Join-Path $bundleDir "obxod-box-v$version"
-          if (Test-Path -LiteralPath $bundleDirPath) {
-            echo "bundle_path=$bundleDirPath" >> $env:GITHUB_OUTPUT
-            Write-Host "Bundle dir: $bundleDirPath"
+          if (-not (Test-Path -LiteralPath $bundleDirPath -PathType Container)) {
+            throw "Bundle directory not found for version $version`: $bundleDirPath"
           }
+          $bundleArchive = Join-Path $bundleDir "obxod-box-v$version-bundle.zip"
+          Compress-Archive -Path $bundleDirPath -DestinationPath $bundleArchive -CompressionLevel Optimal -Force
+          echo "bundle_path=$bundleArchive" >> $env:GITHUB_OUTPUT
+          Write-Host "Bundle archive: $bundleArchive"
           echo "version=$version" >> $env:GITHUB_OUTPUT
 
       - name: Create GitHub Release

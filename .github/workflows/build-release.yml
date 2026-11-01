@@ -53,17 +53,17 @@ jobs:
 
       - name: Build Release
         id: build
-              working-directory: ${{ github.workspace }}
-              run: |
-                $bump = "${{ github.event.inputs.bump }}"
-                $noInstaller = "${{ github.event.inputs.no_installer }}"
+        working-directory: ${{ github.workspace }}
+        run: |
+          $bump = "${{ github.event.inputs.bump }}"
+          $noInstaller = "${{ github.event.inputs.no_installer }}"
           
-                $args = @()
-                if ($bump) { $args += "-Bump $bump" }
-                if ($noInstaller -eq 'true') { $args += "-NoInstaller" }
+          $args = @()
+          if ($bump) { $args += "-Bump $bump" }
+          if ($noInstaller -eq 'true') { $args += "-NoInstaller" }
           
-                Write-Host "Running mkbuild.ps1 with args: $args"
-                & .\mkbuild.ps1 @args
+          Write-Host "Running mkbuild.ps1 with args: $args"
+          & .\mkbuild.ps1 @args
 
       - name: Find built artifacts
         id: artifacts

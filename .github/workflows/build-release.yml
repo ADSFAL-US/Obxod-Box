@@ -33,7 +33,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Need full history for version detection
+          fetch-depth: 0
 
       - name: Setup Python 3.11
         uses: actions/setup-python@v5
@@ -54,7 +54,6 @@ jobs:
           Invoke-WebRequest -Uri $runtimeUrl -OutFile $runtimeZip
           Write-Host "Extracting runtime..."
           Expand-Archive -Path $runtimeZip -DestinationPath runtime -Force
-          # Also need pip - download get-pip.py
           Invoke-WebRequest -Uri "https://bootstrap.pypa.io/get-pip.py" -OutFile "runtime/get-pip.py"
           cd runtime
           .\python.exe get-pip.py
@@ -68,90 +67,88 @@ jobs:
           pip install -r requirements.txt
 
       - name: Get latest version from GitHub
-              id: version
-              run: |
-                # Get latest tag from GitHub
-                $tags = git tag -l "v*" --sort=-v:refname
-                if ($tags.Count -gt 0) {
-                  $latestTag = $tags[0]
-                  $version = $latestTag.TrimStart('v')
-                  Write-Host "Latest tag: $latestTag"
-                  Write-Host "Latest version: $version"
-                } else {
-                  $version = "0.0.0"
-                  Write-Host "No tags found, starting from v$version"
-                }
-                echo "latest_version=$version" >> $env:GITHUB_OUTPUT
+        id: version
+        run: |
+          $tags = git tag -l "v*" --sort=-v:refname
+          if ($tags.Count -gt 0) {
+            $latestTag = $tags[0]
+            $version = $latestTag.TrimStart('v')
+            Write-Host "Latest tag: $latestTag"
+            Write-Host "Latest version: $version"
+          } else {
+            $version = "0.0.0"
+            Write-Host "No tags found, starting from v$version"
+          }
+          echo "latest_version=$version" >> $env:GITHUB_OUTPUT
 
-            - name: Build Release
-              id: build
-              working-directory: ${{ github.workspace }}
-              env:
-                LATEST_VERSION: ${{ steps.version.outputs.latest_version }}
-                BUMP_TYPE: ${{ github.event.inputs.bump }}
-                NO_INSTALLER: ${{ github.event.inputs.no_installer }}
-              run: |
-                $latestVersion = $env:LATEST_VERSION
-                $bump = $env:BUMP_TYPE
-                $noInstaller = $env:NO_INSTALLER
-          
-                $args = @("-BaseVersion $latestVersion")
-                if ($bump) { $args += "-Bump $bump" }
-                if ($noInstaller -eq 'true') { $args += "-NoInstaller" }
-          
-                Write-Host "Working directory: $(Get-Location)"
-                Write-Host "Running mkbuild.ps1 with args: $args"
-                & "${{ github.workspace }}\mkbuild.ps1" @args
-          
-                # Calculate new version for outputs
-                $p = $latestVersion.Split('.')
-                $z = [int]$p[0]; $y = [int]$p[1]; $x = [int]$p[2]
-                switch ($bump.ToLower()) {
-                  'z' { $z++; $y = 0; $x = 0 }
-                  'y' { $y++; $x = 0 }
-                  'x' { $x++ }
-                }
-                $newVersion = "$z.$y.$x"
-                echo "new_version=$newVersion" >> $env:GITHUB_OUTPUT
+      - name: Build Release
+        id: build
+        working-directory: ${{ github.workspace }}
+        env:
+          LATEST_VERSION: ${{ steps.version.outputs.latest_version }}
+          BUMP_TYPE: ${{ github.event.inputs.bump }}
+          NO_INSTALLER: ${{ github.event.inputs.no_installer }}
+        run: |
+          $latestVersion = $env:LATEST_VERSION
+          $bump = $env:BUMP_TYPE
+          $noInstaller = $env:NO_INSTALLER
 
-                  - name: Find built artifacts
-              id: artifacts
-              run: |
-                $version = "${{ steps.build.outputs.new_version }}"
-                $bundleDir = ".\build-bundle"
-          
-                $installer = Get-ChildItem -LiteralPath $bundleDir -Filter "Obxod-BOX-Setup-v$version.exe" | Select-Object -First 1
-                if ($installer) {
-                  echo "installer_path=$($installer.FullName)" >> $env:GITHUB_OUTPUT
-                  Write-Host "Installer: $($installer.FullName)"
-                }
-                $bundleDirPath = Join-Path $bundleDir "obxod-box-v$version"
-                if (Test-Path -LiteralPath $bundleDirPath) {
-                  echo "bundle_path=$bundleDirPath" >> $env:GITHUB_OUTPUT
-                  Write-Host "Bundle dir: $bundleDirPath"
-                }
-                echo "version=$version" >> $env:GITHUB_OUTPUT
+          $args = @("-BaseVersion $latestVersion")
+          if ($bump) { $args += "-Bump $bump" }
+          if ($noInstaller -eq 'true') { $args += "-NoInstaller" }
 
-            - name: Create GitHub Release
-              uses: softprops/action-gh-release@v2
-              if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
-              with:
-                tag_name: v${{ steps.artifacts.outputs.version }}
-                name: Release v${{ steps.artifacts.outputs.version }}
-                draft: false
-                prerelease: false
-                generate_release_notes: true
-                files: |
-                  ${{ steps.artifacts.outputs.installer_path }}
-                  ${{ steps.artifacts.outputs.bundle_path }}
-              env:
-                GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          Write-Host "Working directory: $(Get-Location)"
+          Write-Host "Running mkbuild.ps1 with args: $args"
+          & "${{ github.workspace }}\mkbuild.ps1" @args
 
-            - name: Upload artifacts for manual download
-              uses: actions/upload-artifact@v4
-              with:
-                name: obxod-box-release-${{ steps.artifacts.outputs.version }}
-                path: |
-                  ${{ steps.artifacts.outputs.installer_path }}
-                  ${{ steps.artifacts.outputs.bundle_path }}
-                retention-days: 90
+          $p = $latestVersion.Split('.')
+          $z = [int]$p[0]; $y = [int]$p[1]; $x = [int]$p[2]
+          switch ($bump.ToLower()) {
+            'z' { $z++; $y = 0; $x = 0 }
+            'y' { $y++; $x = 0 }
+            'x' { $x++ }
+          }
+          $newVersion = "$z.$y.$x"
+          echo "new_version=$newVersion" >> $env:GITHUB_OUTPUT
+
+      - name: Find built artifacts
+        id: artifacts
+        run: |
+          $version = "${{ steps.build.outputs.new_version }}"
+          $bundleDir = ".\build-bundle"
+
+          $installer = Get-ChildItem -LiteralPath $bundleDir -Filter "Obxod-BOX-Setup-v$version.exe" | Select-Object -First 1
+          if ($installer) {
+            echo "installer_path=$($installer.FullName)" >> $env:GITHUB_OUTPUT
+            Write-Host "Installer: $($installer.FullName)"
+          }
+          $bundleDirPath = Join-Path $bundleDir "obxod-box-v$version"
+          if (Test-Path -LiteralPath $bundleDirPath) {
+            echo "bundle_path=$bundleDirPath" >> $env:GITHUB_OUTPUT
+            Write-Host "Bundle dir: $bundleDirPath"
+          }
+          echo "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        with:
+          tag_name: v${{ steps.artifacts.outputs.version }}
+          name: Release v${{ steps.artifacts.outputs.version }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: |
+            ${{ steps.artifacts.outputs.installer_path }}
+            ${{ steps.artifacts.outputs.bundle_path }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload artifacts for manual download
+        uses: actions/upload-artifact@v4
+        with:
+          name: obxod-box-release-${{ steps.artifacts.outputs.version }}
+          path: |
+            ${{ steps.artifacts.outputs.installer_path }}
+            ${{ steps.artifacts.outputs.bundle_path }}
+          retention-days: 90

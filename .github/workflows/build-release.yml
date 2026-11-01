@@ -46,26 +46,26 @@ jobs:
           choco install 7zip -y --no-progress
           echo "C:\Program Files\7-Zip" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
-            - name: Download Python embeddable runtime
+      - name: Download Python embeddable runtime
         run: |
-                $runtimeUrl = "https://www.python.org/ftp/python/3.11.9/python-3.11.9-embed-amd64.zip"
-                $runtimeZip = "python-embed.zip"
-                Write-Host "Downloading Python embeddable runtime..."
-                Invoke-WebRequest -Uri $runtimeUrl -OutFile $runtimeZip
-                Write-Host "Extracting runtime..."
-                Expand-Archive -Path $runtimeZip -DestinationPath runtime -Force
-                # Also need pip - download get-pip.py
-                Invoke-WebRequest -Uri "https://bootstrap.pypa.io/get-pip.py" -OutFile "runtime/get-pip.py"
-                cd runtime
-                .\python.exe get-pip.py
-                cd ..
-                Remove-Item $runtimeZip
-                Write-Host "Runtime ready at $(Get-Location)/runtime"
+          $runtimeUrl = "https://www.python.org/ftp/python/3.11.9/python-3.11.9-embed-amd64.zip"
+          $runtimeZip = "python-embed.zip"
+          Write-Host "Downloading Python embeddable runtime..."
+          Invoke-WebRequest -Uri $runtimeUrl -OutFile $runtimeZip
+          Write-Host "Extracting runtime..."
+          Expand-Archive -Path $runtimeZip -DestinationPath runtime -Force
+          # Also need pip - download get-pip.py
+          Invoke-WebRequest -Uri "https://bootstrap.pypa.io/get-pip.py" -OutFile "runtime/get-pip.py"
+          cd runtime
+          .\python.exe get-pip.py
+          cd ..
+          Remove-Item $runtimeZip
+          Write-Host "Runtime ready at $(Get-Location)/runtime"
 
-            - name: Install Python dependencies
-              run: |
-                python -m pip install --upgrade pip
-                pip install -r requirements.txt
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
       - name: Build Release
         id: build
@@ -78,9 +78,9 @@ jobs:
           if ($bump) { $args += "-Bump $bump" }
           if ($noInstaller -eq 'true') { $args += "-NoInstaller" }
           
-                Write-Host "Working directory: $(Get-Location)"
-                Write-Host "Running mkbuild.ps1 with args: $args"
-                & "${{ github.workspace }}\mkbuild.ps1" @args
+          Write-Host "Working directory: $(Get-Location)"
+          Write-Host "Running mkbuild.ps1 with args: $args"
+          & "${{ github.workspace }}\mkbuild.ps1" @args
 
       - name: Find built artifacts
         id: artifacts

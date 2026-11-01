@@ -37,8 +37,6 @@ cfg/providers/
 cfg/routing/*.json
 !cfg/routing/RU-auto-routing.json
 
-# ── Инструменты сборки ──────────────────────────────────────────────
-
 # ── Мусор ОС ────────────────────────────────────────────────────────
 Thumbs.db
 desktop.ini

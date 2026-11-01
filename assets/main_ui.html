@@ -1,0 +1,1305 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html { color-scheme: dark; }
+  body {
+    margin: 0; padding: 0;
+    background: #2d2d2d;
+    height: 100vh;
+    overflow: hidden;
+    min-width: 240px;
+    min-height: 320px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: white;
+    user-select: none;
+    color-scheme: dark;
+  }
+
+  .import-btn {
+    position: absolute;
+    top: clamp(12px, 3vh, 24px);
+    right: clamp(12px, 3vw, 24px);
+    width: clamp(32px, 4vw, 44px);
+    height: clamp(32px, 4vw, 44px);
+    background: #3a3a3a;
+    border-radius: 50%;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif;
+    font-size: clamp(20px, 3vw, 28px);
+    line-height: 1;
+    padding-bottom: 1px;
+    color: #aaa;
+    cursor: pointer;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+    transition: all 0.2s ease;
+    z-index: 10;
+  }
+  .import-btn:hover {
+    background: #4a4a4a;
+    color: #fff;
+    transform: scale(1.05);
+  }
+
+  .refresh-btn {
+    position: absolute;
+    top: clamp(12px, 3vh, 24px);
+    right: calc(clamp(12px, 3vw, 24px) + clamp(40px, 5vw, 52px));
+    width: clamp(32px, 4vw, 44px);
+    height: clamp(32px, 4vw, 44px);
+    background: #3a3a3a;
+    border-radius: 50%;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    color: #aaa;
+    cursor: pointer;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+    transition: background 0.2s ease, color 0.2s ease, transform 0.2s ease;
+    z-index: 10;
+  }
+  .refresh-btn:hover {
+    background: #4a4a4a;
+    color: #fff;
+    transform: scale(1.05);
+  }
+  .refresh-btn.busy {
+    color: #a79bff;
+    border: 1px solid #5a4bcf;
+    animation: ping-pulse 1.1s ease-in-out infinite;
+    cursor: default;
+    pointer-events: none;
+  }
+  .refresh-btn.disabled {
+    opacity: 0.35;
+    cursor: default;
+    pointer-events: none;
+  }
+
+  .hamburger {
+    position: absolute;
+    top: clamp(12px, 3vh, 24px);
+    left: clamp(12px, 3vw, 24px);
+    background: #3a3a3a;
+    border-radius: 12px;
+    padding: clamp(10px, 1.5vw, 14px);
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    cursor: pointer;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+    z-index: 10;
+  }
+  .hamburger div {
+    width: 18px; height: 3px;
+    background: #aaa; border-radius: 2px;
+  }
+
+  /* Куб вынесен в assets/cube/ (подключает main_window._load_ui_html) */
+
+  .pickers {
+    position: absolute;
+    top: 58%;
+    left: 50%;
+    transform: translateX(-50%);
+    width: clamp(300px, 70vw, 560px);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    z-index: 20;
+  }
+
+  .ping-btn {
+    position: absolute;
+    right: 0;
+    bottom: calc(100% + 4px);
+    width: 25px;
+    height: 25px;
+    border-radius: 50%;
+    background: #3a3a3a;
+    border: 1px solid #4a4a4a;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    cursor: pointer;
+    color: #cfcfcf;
+    box-shadow: 0 3px 8px rgba(0,0,0,0.55);
+    transition: background 0.2s, color 0.2s, border-color 0.2s;
+    z-index: 23;
+  }
+  .ping-btn svg { display: block; }
+  .ping-btn:hover {
+    background: #4a4a4a;
+    color: #fff;
+    border-color: #5a5a5a;
+  }
+  .ping-btn.busy {
+    color: #a79bff;
+    border-color: #5a4bcf;
+    animation: ping-pulse 1.1s ease-in-out infinite;
+    cursor: default;
+    pointer-events: none;
+  }
+  @keyframes ping-pulse {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.5; }
+  }
+
+  .active-ping {
+    position: absolute;
+    right: 31px;
+    bottom: calc(100% + 4px);
+    background: #2b2b2b;
+    border: 1px solid #4a4a4a;
+    border-radius: 8px;
+    padding: 3px 10px;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.3px;
+    color: #ccc;
+    white-space: nowrap;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.45);
+    display: none;
+    min-width: 48px;
+    text-align: center;
+    z-index: 22;
+  }
+  .active-ping.visible { display: inline-block; }
+  .active-ping.good { color: #4ade80; border-color: #2a4a34; }
+  .active-ping.mid  { color: #fbbf24; border-color: #4a3d1e; }
+  .active-ping.bad  { color: #ef4444; border-color: #4a2222; }
+
+  .picker-list {
+    position: absolute;
+    bottom: calc(100% + 6px);
+    left: 0;
+    right: 0;
+    max-height: min(260px, 40vh);
+    overflow-y: auto;
+    background: #3a3a3a;
+    border-radius: 12px;
+    padding: 6px;
+    box-shadow: 0 6px 16px rgba(0,0,0,0.55);
+    display: none;
+    border: 1px solid #4a4a4a;
+    z-index: 25;
+  }
+  .picker-list::-webkit-scrollbar { width: 6px; }
+  .picker-list::-webkit-scrollbar-thumb {
+    background: #555; border-radius: 3px;
+  }
+  .pickers.open .picker-list { display: block; }
+
+  .picker-card {
+    background: #3a3a3a;
+    border-radius: 12px;
+    padding: 8px 12px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    cursor: pointer;
+    box-shadow: 0 3px 8px rgba(0,0,0,0.4);
+    transition: background 0.2s ease, border-color 0.2s ease;
+    border: 1px solid transparent;
+    overflow: hidden;
+    min-height: 44px;
+  }
+  .picker-card:hover { background: #454545; }
+  .picker-card.active {
+    background: #454545;
+    border-color: #5a4bcf;
+  }
+  .picker-card.empty {
+    opacity: 0.55;
+    cursor: default;
+  }
+
+  .picker-info {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: row;
+    gap: 4px;
+  }
+  .picker-name {
+    font-size: 12px;
+    font-weight: 600;
+    color: #fff;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    line-height: 1.15;
+  }
+  .picker-tags {
+    flex: 0 0 auto;
+    display: flex;
+    gap: 4px;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    row-gap: 4px;
+    max-height: 40px;
+    overflow: hidden;
+  }
+  .picker-tag {
+    font-size: 9px;
+    padding: 1px 7px;
+    border-radius: 4px;
+    background: #555;
+    color: #ccc;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    font-weight: 600;
+    line-height: 1.5;
+    white-space: nowrap;
+  }
+  .picker-tag.tls     { background: #1a4b3a; color: #6be6b0; }
+  .picker-tag.reality { background: #4a1a5a; color: #d78eff; }
+  .picker-tag.warn    { background: #6b3a1a; color: #ffb06b; }
+  .picker-tag.info    { background: #2b3a5a; color: #8ab4f8; }
+  .picker-tag.count   { background: #1f2d1f; color: #86efac; }
+
+  .picker-arrow {
+    flex-shrink: 0;
+    color: #888;
+    font-size: 11px;
+    transition: transform 0.2s ease;
+    line-height: 1;
+  }
+  .picker-card.active .picker-arrow {
+    transform: rotate(180deg);
+  }
+
+  .picker-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background 0.15s;
+    margin-bottom: 2px;
+  }
+  .picker-item:last-child { margin-bottom: 0; }
+  .picker-item:hover { background: #4a4a4a; }
+  .picker-item.selected { background: #6c5ce7; }
+  .picker-item.selected .picker-name { color: #fff; }
+  .picker-item.selected .picker-tag {
+    background: rgba(255,255,255,0.15);
+    color: #fff;
+  }
+  .picker-item.selected .picker-ping {
+    background: rgba(0,0,0,0.35);
+    color: #fff;
+  }
+  .picker-item .picker-name { font-size: 12px; font-weight: 500; }
+  .picker-item .picker-tag  { font-size: 8px; padding: 1px 5px; }
+
+  .picker-ping {
+    flex-shrink: 0;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 3px 8px;
+    border-radius: 6px;
+    background: #2a2a2a;
+    color: #888;
+    min-width: 54px;
+    text-align: center;
+    letter-spacing: 0.3px;
+  }
+  .picker-ping.good { color: #4ade80; background: #1a2d1f; }
+  .picker-ping.mid  { color: #fbbf24; background: #2d2418; }
+  .picker-ping.bad  { color: #ef4444; background: #2d1a1a; }
+  .picker-ping.unknown { color: #666; }
+
+  .xray-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 6px 0 6px;
+    font-size: 12px;
+    color: #999;
+    min-height: 20px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .status-dot {
+    width: 9px; height: 9px;
+    border-radius: 50%;
+    background: #555;
+    flex-shrink: 0;
+    transition: background 0.3s ease;
+  }
+  .status-dot.running  { background: #4ade80; box-shadow: 0 0 6px #4ade80; }
+  .status-dot.starting { background: #fbbf24; animation: pulse 1s infinite; }
+  .status-dot.error    { background: #ef4444; }
+  .status-dot.network_down { background: #fbbf24; animation: pulse 1.5s infinite; }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+  .status-text { color: #aaa; }
+  .status-text.error { color: #ef4444; }
+  .status-text.network_down { color: #fbbf24; }
+
+  .modal-overlay {
+    position: absolute;
+    top: 0; left: 0; width: 100%; height: 100%;
+    background: rgba(0,0,0,0.6);
+    display: none;
+    justify-content: center;
+    align-items: center;
+    z-index: 100;
+  }
+  .modal-content {
+    background: #3a3a3a;
+    padding: 24px;
+    border-radius: 16px;
+    width: clamp(280px, 60vw, 400px);
+    box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .modal-content h3 { margin: 0 0 8px 0; color: #fff; font-size: 18px; }
+  .modal-content input {
+    padding: 10px 12px;
+    border-radius: 8px;
+    border: 1px solid #555;
+    background: #2d2d2d;
+    color: #fff;
+    font-size: 14px;
+    outline: none;
+  }
+  .modal-content input:focus { border-color: #6c5ce7; }
+  .modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 8px;
+  }
+  .modal-actions button {
+    padding: 8px 16px;
+    border-radius: 8px;
+    border: none;
+    font-size: 14px;
+    cursor: pointer;
+    font-weight: bold;
+    transition: background 0.2s;
+  }
+  .btn-cancel { background: #555; color: #ddd; }
+  .btn-cancel:hover { background: #666; }
+  .btn-submit { background: #6c5ce7; color: #fff; }
+  .btn-submit:hover { background: #5a4bcf; }
+
+  .toggle-wrapper {
+    position: absolute;
+    bottom: clamp(9px, 3vh, 24px);
+    left: 50%;
+    transform: translateX(-50%);
+    background: #3a3a3a;
+    border-radius: 28px;
+    padding: 6px 8px;
+    box-shadow: 0 6px 14px rgba(0,0,0,0.5);
+    z-index: 50;
+  }
+  .toggle-wrapper::before {
+    content: '';
+    position: absolute;
+    right: -8px;
+    bottom: 0px;
+    width: 30px;
+    height: 22px;
+    background: #3a3a3a;
+    border-radius: 0 11px 11px 0;
+  }
+  .toggle-track {
+    position: relative;
+    z-index: 1;
+    background: #d1d1d1;
+    border-radius: 30px;
+    padding: 3px;
+    display: flex;
+    align-items: center;
+  }
+  .toggle-segment {
+    width: clamp(38px, 6vw, 62px);
+    height: clamp(38px, 6vw, 62px);
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    font-size: clamp(8px, 1.1vw, 11px);
+    font-weight: bold;
+    color: #555;
+    cursor: pointer;
+    border-radius: 50%;
+    margin: 0 1px;
+    text-align: center;
+    line-height: 1.1;
+    transition: all 0.25s ease;
+  }
+  .toggle-segment.active {
+    background: #1a1a1a;
+    color: #fff;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.5);
+  }
+  .toggle-segment:not(.active) { background: #c8c8c8; }
+
+  .info {
+    position: absolute;
+    right: 2px;
+    bottom: 5px;
+    font-family: Georgia, "Times New Roman", serif;
+    font-style: italic;
+    font-size: clamp(10px, 1.3vw, 14px);
+    font-weight: bold;
+    color: #d0d0d0;
+    line-height: 1;
+    cursor: pointer;
+    z-index: 2;
+    transition: opacity 0.2s ease;
+  }
+  .info:hover { opacity: 0.7; }
+
+  .info-box {
+    position: absolute;
+    left: calc(100% + 10px);
+    bottom: 0;
+    background: #3a3a3a;
+    border: 1px solid #555;
+    border-radius: 8px;
+    padding: 12px 16px;
+    max-width: 400px;
+    min-width: 280px;
+    font-size: 13px;
+    color: #e0e0e0;
+    line-height: 1.4;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+    opacity: 0;
+    visibility: hidden;
+    transform: translateX(-10px);
+    transition: all 0.3s ease;
+    z-index: 1000;
+    pointer-events: none;
+    white-space: normal;
+    word-wrap: break-word;
+  }
+  .info-box.visible {
+    opacity: 1; visibility: visible;
+    transform: translateX(0); pointer-events: auto;
+  }
+  .info-box strong { color: #fff; font-weight: bold; }
+
+  .settings-root {
+    position: fixed;
+    inset: 0;
+    z-index: 150;
+    pointer-events: none;
+    visibility: hidden;
+  }
+  .settings-root.open { pointer-events: auto; visibility: visible; }
+
+  .settings-backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(0,0,0,0.55);
+    opacity: 0;
+    transition: opacity 0.25s ease;
+  }
+  .settings-root.open .settings-backdrop { opacity: 1; }
+
+  .settings-panel {
+    position: absolute;
+    top: 0; left: 0;
+    width: min(420px, 92vw);
+    height: 100%;
+    background: #2d2d2d;
+    border-right: 1px solid #3a3a3a;
+    box-shadow: 4px 0 24px rgba(0,0,0,0.55);
+    transform: translateX(-100%);
+    transition: transform 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .settings-root.open .settings-panel { transform: translateX(0); }
+
+  .settings-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 18px 20px;
+    border-bottom: 1px solid #3a3a3a;
+    flex-shrink: 0;
+  }
+  .settings-header h2 { margin: 0; font-size: 18px; font-weight: 600; color: #fff; }
+  .settings-close {
+    width: 32px; height: 32px;
+    display: flex; align-items: center; justify-content: center;
+    border-radius: 8px; color: #aaa; font-size: 22px; line-height: 1;
+    cursor: pointer; transition: background 0.15s, color 0.15s;
+  }
+  .settings-close:hover { background: #3a3a3a; color: #fff; }
+
+  .settings-body { flex: 1; overflow-y: auto; padding: 4px 0 24px; }
+  .settings-body::-webkit-scrollbar { width: 6px; }
+  .settings-body::-webkit-scrollbar-thumb { background: #555; border-radius: 3px; }
+
+  .settings-section { padding: 4px 20px; }
+  .settings-section-title {
+    font-size: 11px; font-weight: 700; letter-spacing: 1px;
+    text-transform: uppercase; color: #6c5ce7;
+    margin: 14px 0 6px;
+  }
+  .settings-item {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 12px;
+    padding: 10px 0;
+    border-bottom: 1px solid #383838;
+    font-size: 13px; color: #ddd;
+  }
+  .settings-item:last-child { border-bottom: none; }
+  .settings-item > label:first-child { flex: 1; min-width: 0; cursor: pointer; user-select: none; }
+
+  .settings-item select,
+  .settings-item input[type="text"],
+  .settings-item input[type="number"] {
+    background: #3a3a3a; border: 1px solid #4a4a4a;
+    border-radius: 8px; color: #e8e8e8;
+    padding: 6px 10px; font-size: 13px;
+    outline: none;
+    text-align: center;
+    transition: border-color 0.15s;
+    color-scheme: dark;
+  }
+  .settings-item select,
+  .settings-item input[type="number"] {
+    min-width: 92px; max-width: 160px;
+  }
+  .settings-item select {
+    max-width: 200px;
+    text-align: left;
+    /* native popup на Linux часто светлый — форсим тёмный фон option */
+    background-color: #3a3a3a;
+    color: #e8e8e8;
+  }
+  .settings-item select option {
+    background-color: #2d2d2d;
+    color: #e8e8e8;
+  }
+  .settings-item input[type="text"] {
+    width: 190px;
+    min-width: 0;
+    max-width: 220px;
+    text-align: left;
+  }
+  .settings-item select:focus,
+  .settings-item input:focus { border-color: #6c5ce7; }
+
+  .settings-hint {
+    font-size: 11px;
+    color: #888;
+    line-height: 1.4;
+    margin: 4px 0 8px;
+  }
+
+  .switch {
+    position: relative; display: inline-block;
+    width: 42px; height: 24px; flex-shrink: 0;
+  }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .switch span {
+    position: absolute; cursor: pointer; inset: 0;
+    background: #4a4a4a; border-radius: 24px;
+    transition: background 0.2s;
+  }
+  .switch span::before {
+    content: ''; position: absolute;
+    height: 18px; width: 18px; left: 3px; bottom: 3px;
+    background: #fff; border-radius: 50%;
+    transition: transform 0.2s;
+  }
+  .switch input:checked + span { background: #6c5ce7; }
+  .switch input:checked + span::before { transform: translateX(18px); }
+
+  @media (max-width: 520px), (max-height: 560px) {
+    body { overflow: auto; }
+    .pickers { top: 58%; width: clamp(260px, 88vw, 480px); }
+    .toggle-wrapper { bottom: 16px; }
+    .toggle-segment { width: 40px; height: 40px; font-size: 8px; }
+    .picker-list { max-height: 150px; }
+    .ping-btn { width: 28px; height: 28px; }
+    .active-ping { right: 34px; }
+  }
+</style>
+</head>
+<body>
+  <div class="import-btn" onclick="openImportModal()" aria-label="Импорт">
+    <svg width="50%" height="50%" viewBox="0 0 24 24" fill="none"
+        stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+        <line x1="12" y1="5" x2="12" y2="19"/>
+        <line x1="5" y1="12" x2="19" y2="12"/>
+    </svg>
+  </div>
+
+  <div class="refresh-btn disabled" id="refreshBtn"
+       onclick="updateSubscription()" title="Обновить подписку">
+    <svg width="55%" height="55%" viewBox="0 0 24 24" fill="none"
+         stroke="currentColor" stroke-width="2.5"
+         stroke-linecap="round" stroke-linejoin="round">
+        <path d="M23 4v6h-6"/>
+        <path d="M1 20v-6h6"/>
+        <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10"/>
+        <path d="M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+    </svg>
+  </div>
+
+  <div class="hamburger" onclick="openSettings()" title="Настройки">
+    <div></div><div></div><div></div>
+  </div>
+
+  <!-- Точка монтирования куба (разметку и логику даёт assets/cube/) -->
+  <div class="face-area" id="cube-root"></div>
+
+  <div class="pickers" id="pickers">
+    <div class="picker-list" id="pickerList"></div>
+
+    <div class="active-ping" id="activePing"></div>
+
+    <div class="ping-btn" id="pingBtn" onclick="startPing(event)" title="Пропинговать все конфиги">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
+           stroke="currentColor" stroke-width="2.2"
+           stroke-linecap="round" stroke-linejoin="round">
+        <path d="M13 2L4.5 13.5h6L10 22l8.5-11.5h-6L13 2z"/>
+      </svg>
+    </div>
+
+    <div class="picker-card empty" id="providerCard"
+         onclick="togglePicker('provider', event)">
+      <div class="picker-info">
+        <div class="picker-name" id="providerName">Нет провайдеров</div>
+        <div class="picker-tags" id="providerTags"></div>
+      </div>
+      <span class="picker-arrow">▼</span>
+    </div>
+
+    <div class="picker-card empty" id="configCard"
+         onclick="togglePicker('config', event)">
+      <div class="picker-info">
+        <div class="picker-name" id="configName">Конфиги не загружены</div>
+        <div class="picker-tags" id="configTags"></div>
+      </div>
+      <span class="picker-arrow">▼</span>
+    </div>
+
+    <div class="xray-status">
+      <span class="status-dot" id="xrayDot"></span>
+      <span class="status-text" id="xrayText">Нажмите на куб для подключения</span>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="importModal">
+    <div class="modal-content">
+      <h3>Импорт подписки</h3>
+      <input type="text" id="importUrl" placeholder="URL подписки (http/https)">
+      <input type="text" id="importName" placeholder="Имя провайдера (необязательно)">
+      <div class="modal-actions">
+        <button class="btn-cancel" onclick="closeImportModal()">Отмена</button>
+        <button class="btn-submit" onclick="submitImport()">Импортировать</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toggle-wrapper">
+      <div class="toggle-track">
+        <div class="toggle-segment" data-mode="tun">TUN</div>
+        <div class="toggle-segment" data-mode="both">TUN<br>+<br>PROXY</div>
+        <div class="toggle-segment" data-mode="proxy">PROXY</div>
+      </div>
+      <span class="info">i</span>
+      <div class="info-box">
+        <strong>Инфо:</strong> Это приложение предоставляет три режима подключения:<br>
+        • <strong>TUN</strong> - Глобальная маршрутизация через виртуальный интерфейс<br>
+        • <strong>PROXY</strong> - HTTP/SOCKS прокси для отдельных приложений<br>
+        • <strong>TUN+PROXY</strong> - Одновременно виртуальный интерфейс и прокси
+      </div>
+    </div>
+
+  <div class="settings-root" id="settingsRoot">
+    <div class="settings-backdrop" onclick="closeSettings()"></div>
+    <div class="settings-panel">
+      <div class="settings-header">
+        <h2>Настройки</h2>
+        <span class="settings-close" onclick="closeSettings()">×</span>
+      </div>
+      <div class="settings-body">
+
+        <div class="settings-section">
+          <div class="settings-section-title">Xray</div>
+
+          <div class="settings-item">
+            <label for="setLoglevel">Уровень логирования</label>
+            <select id="setLoglevel">
+              <option value="debug">debug</option>
+              <option value="info">info</option>
+              <option value="warning">warning</option>
+              <option value="error">error</option>
+              <option value="none">none</option>
+            </select>
+          </div>
+
+          <div class="settings-item">
+            <label for="setLogRotate">Хранить лог (мин)</label>
+            <input type="number" id="setLogRotate" min="1" max="1440" step="1">
+          </div>
+        </div>
+
+        <div class="settings-section">
+          <div class="settings-section-title">Маршрутизация</div>
+
+          <div class="settings-item">
+            <label for="setRoutingSet">Набор правил</label>
+            <select id="setRoutingSet">
+              <option value="">Без маршрутизации</option>
+            </select>
+          </div>
+
+          <div class="settings-hint" id="routingSetHint">
+            Выберите набор правил, чтобы направлять трафик по гео-признакам.
+          </div>
+        </div>
+
+        <div class="settings-section">
+          <div class="settings-section-title">Сеть</div>
+
+          <div class="settings-item">
+            <label for="setNetWatch">Следить за состоянием сети</label>
+            <label class="switch">
+              <input type="checkbox" id="setNetWatch">
+              <span></span>
+            </label>
+          </div>
+
+          <div class="settings-item">
+            <label for="setNetInterval">Интервал проверки (с)</label>
+            <input type="number" id="setNetInterval" min="1" max="60" step="1">
+          </div>
+
+          <div class="settings-item">
+            <label for="setAutoReconnect">Автопереподключение</label>
+            <label class="switch">
+              <input type="checkbox" id="setAutoReconnect">
+              <span></span>
+            </label>
+          </div>
+
+          <div class="settings-item">
+            <label for="setRestartIface">Рестарт при смене интерфейса</label>
+            <label class="switch">
+              <input type="checkbox" id="setRestartIface">
+              <span></span>
+            </label>
+          </div>
+        </div>
+
+        <div class="settings-section">
+          <div class="settings-section-title">Пинг</div>
+
+          <div class="settings-item">
+            <label for="setPingUrl">URL для пинга</label>
+            <input type="text" id="setPingUrl" placeholder="https://...">
+          </div>
+
+          <div class="settings-item">
+            <label for="setPingTimeout">Таймаут (с)</label>
+            <input type="number" id="setPingTimeout" min="1" max="30" step="1">
+          </div>
+
+          <div class="settings-item">
+            <label for="setPingConcurrency">Одновременных пингов</label>
+            <input type="number" id="setPingConcurrency" min="1" max="20" step="1">
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Куб: assets/cube/* (инжектит Python). Здесь — остальной UI shell.
+
+    // Очередь для Linux/macOS (WebKit): Python забирает poll'ом.
+    // На Windows — chrome.webview.postMessage (WebView2).
+    window.__obxodQueue = window.__obxodQueue || [];
+
+    function sendToPython(payload) {
+      try {
+        if (window.chrome && window.chrome.webview && window.chrome.webview.postMessage) {
+          window.chrome.webview.postMessage(JSON.stringify(payload));
+          return;
+        }
+      } catch (e) { /* fall through to queue */ }
+      window.__obxodQueue.push(payload);
+    }
+    // для ObxodCube (клик по кубу)
+    window.sendToPython = sendToPython;
+
+    window.addEventListener('keydown', function(e) {
+      if (e.key === 'F5' && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+        e.preventDefault();
+        sendToPython({ action: "reload" });
+      }
+    }, true);
+
+    const initialMode = "__INITIAL_MODE__";
+    const segments = document.querySelectorAll('.toggle-segment');
+    segments.forEach(segment => {
+      if (segment.dataset.mode === initialMode) {
+        segment.classList.add('active');
+      }
+      segment.addEventListener('click', function() {
+        segments.forEach(s => s.classList.remove('active'));
+        this.classList.add('active');
+        sendToPython({ action: "set_mode", mode: this.dataset.mode });
+      });
+    });
+
+    const infoButton = document.querySelector('.info');
+    const infoBox = document.querySelector('.info-box');
+    if (infoButton && infoBox) {
+      infoButton.addEventListener('mouseenter', () => infoBox.classList.add('visible'));
+      infoButton.addEventListener('mouseleave', () => infoBox.classList.remove('visible'));
+      infoBox.addEventListener('mouseenter', () => infoBox.classList.add('visible'));
+      infoBox.addEventListener('mouseleave', () => infoBox.classList.remove('visible'));
+    }
+
+    function openImportModal() {
+      closeSettings();
+      document.getElementById('importModal').style.display = 'flex';
+      document.getElementById('importUrl').focus();
+    }
+    function closeImportModal() {
+      document.getElementById('importModal').style.display = 'none';
+      document.getElementById('importUrl').value = '';
+      document.getElementById('importName').value = '';
+    }
+    function submitImport() {
+      const url = document.getElementById('importUrl').value.trim();
+      const name = document.getElementById('importName').value.trim();
+      if (!url) return;
+      sendToPython({ action: "import", url: url, name: name });
+      closeImportModal();
+    }
+
+    function updateSubscription() {
+      const btn = document.getElementById('refreshBtn');
+      if (!btn || btn.classList.contains('busy') || btn.classList.contains('disabled')) return;
+      if (!activeProvider) {
+        alert("Сначала выберите или импортируйте провайдера.");
+        return;
+      }
+      sendToPython({ action: "update_subscription" });
+    }
+
+    window.setRefreshBusy = function(busy) {
+      const btn = document.getElementById('refreshBtn');
+      if (!btn) return;
+      btn.classList.toggle('busy', !!busy);
+    };
+
+    window.setRefreshEnabled = function(enabled) {
+      const btn = document.getElementById('refreshBtn');
+      if (!btn) return;
+      btn.classList.toggle('disabled', !enabled);
+    };
+
+    let providers = [];
+    let activeProvider = null;
+    let configs = [];
+    let selectedConfigIndex = -1;
+    let pickerMode = null;
+
+    let pingResults = {};
+    let pingBusy = false;
+
+    function escapeHtml(s) {
+      const div = document.createElement('div');
+      div.textContent = String(s == null ? '' : s);
+      return div.innerHTML;
+    }
+
+    function tagClass(tag) {
+      const t = String(tag || '').toLowerCase();
+      if (t === 'tls') return 'tls';
+      if (t === 'reality') return 'reality';
+      if (t === 'none' || t === '') return 'warn';
+      if (t === 'json' || t === 'link') return 'info';
+      return '';
+    }
+
+    function buildTags(cfg) {
+      const tags = [];
+      if (cfg.protocol)  tags.push(cfg.protocol);
+      if (cfg.transport) tags.push(cfg.transport);
+      if (cfg.type)      tags.push(cfg.type);
+      if (cfg.security)  tags.push(cfg.security);
+      return tags.map(t => {
+        const cls = tagClass(t);
+        return `<span class="picker-tag ${cls}">${escapeHtml(t)}</span>`;
+      }).join('');
+    }
+
+    function pingClass(ms) {
+      if (ms == null) return 'unknown';
+      if (ms < 300) return 'good';
+      if (ms < 800) return 'mid';
+      return 'bad';
+    }
+
+    function renderProviderCard() {
+      const card = document.getElementById('providerCard');
+      const nameEl = document.getElementById('providerName');
+      const tagsEl = document.getElementById('providerTags');
+
+      if (providers.length === 0) {
+        card.classList.add('empty');
+        nameEl.textContent = 'Нет провайдеров';
+        tagsEl.innerHTML = '';
+        return;
+      }
+      card.classList.remove('empty');
+
+      if (activeProvider) {
+        const p = providers.find(x => x.name === activeProvider);
+        nameEl.textContent = activeProvider;
+        tagsEl.innerHTML = p
+          ? `<span class="picker-tag count">${p.count}</span>`
+          : '';
+      } else {
+        nameEl.textContent = 'Выберите провайдера';
+        tagsEl.innerHTML = `<span class="picker-tag count">${providers.length}</span>`;
+      }
+    }
+
+    function renderConfigCard() {
+      const card = document.getElementById('configCard');
+      const nameEl = document.getElementById('configName');
+      const tagsEl = document.getElementById('configTags');
+
+      if (configs.length === 0) {
+        card.classList.add('empty');
+        nameEl.textContent = activeProvider ? 'Конфиги не загружены' : 'Выберите провайдера';
+        tagsEl.innerHTML = '';
+        return;
+      }
+      card.classList.remove('empty');
+
+      if (selectedConfigIndex >= 0 && selectedConfigIndex < configs.length) {
+        const sel = configs[selectedConfigIndex];
+        nameEl.textContent = sel.name || ('Config #' + selectedConfigIndex);
+        tagsEl.innerHTML = buildTags(sel);
+      } else {
+        nameEl.textContent = 'Выберите конфиг';
+        tagsEl.innerHTML = `<span class="picker-tag info">${configs.length} конфигов</span>`;
+      }
+    }
+
+    function renderList() {
+      const listEl = document.getElementById('pickerList');
+      listEl.innerHTML = '';
+
+      if (pickerMode === 'provider') {
+        providers.forEach(p => {
+          const item = document.createElement('div');
+          item.className = 'picker-item' + (p.name === activeProvider ? ' selected' : '');
+          item.innerHTML = `
+            <div class="picker-info">
+              <div class="picker-name">${escapeHtml(p.name)}</div>
+              <div class="picker-tags"><span class="picker-tag info">${p.count} шт.</span></div>
+            </div>
+          `;
+          item.onclick = (ev) => { ev.stopPropagation(); chooseProvider(p.name); };
+          listEl.appendChild(item);
+        });
+      } else if (pickerMode === 'config') {
+        configs.forEach((cfg, i) => {
+          const item = document.createElement('div');
+          item.className = 'picker-item' + (i === selectedConfigIndex ? ' selected' : '');
+
+          const has = Object.prototype.hasOwnProperty.call(pingResults, i);
+          const ms  = has ? pingResults[i] : undefined;
+          let cls, txt;
+          if (!has) {
+            cls = 'unknown'; txt = '—';
+          } else if (ms == null) {
+            cls = 'bad'; txt = '×';
+          } else {
+            cls = pingClass(ms); txt = ms + ' ms';
+          }
+
+          item.innerHTML = `
+            <div class="picker-info">
+              <div class="picker-name">${escapeHtml(cfg.name || ('Config #' + i))}</div>
+              <div class="picker-tags">${buildTags(cfg)}</div>
+            </div>
+            <div class="picker-ping ${cls}">${txt}</div>
+          `;
+          item.onclick = (ev) => { ev.stopPropagation(); chooseConfig(i); };
+          listEl.appendChild(item);
+        });
+      }
+    }
+
+    function togglePicker(mode, e) {
+      if (e) e.stopPropagation();
+      if (pickerMode === mode) { closePicker(); return; }
+      if (mode === 'provider' && providers.length === 0) return;
+      if (mode === 'config' && configs.length === 0) return;
+      pickerMode = mode;
+      document.getElementById('providerCard').classList.toggle('active', mode === 'provider');
+      document.getElementById('configCard').classList.toggle('active', mode === 'config');
+      document.getElementById('pickers').classList.add('open');
+      renderList();
+    }
+
+    function closePicker() {
+      pickerMode = null;
+      document.getElementById('pickers').classList.remove('open');
+      document.getElementById('providerCard').classList.remove('active');
+      document.getElementById('configCard').classList.remove('active');
+    }
+
+    function chooseProvider(name) {
+      closePicker();
+      if (name === activeProvider) return;
+      sendToPython({ action: "select_provider", name: name });
+    }
+
+    function chooseConfig(index) {
+      index = Number(index);
+      if (!Number.isFinite(index)) return;
+      selectedConfigIndex = index | 0;
+      closePicker();
+      renderConfigCard();
+      updateActivePing();
+      sendToPython({ action: "select_config", index: selectedConfigIndex });
+    }
+
+    document.addEventListener('click', function(e) {
+      const pickers = document.getElementById('pickers');
+      if (!pickers.contains(e.target)) closePicker();
+    });
+    document.addEventListener('keydown', function(e) {
+      if (e.key === 'Escape') {
+        closePicker();
+        closeSettings();
+      }
+    });
+
+    window.setProviders = function(list, active) {
+      providers = Array.isArray(list) ? list : [];
+      activeProvider = active || null;
+      renderProviderCard();
+      if (pickerMode === 'provider') renderList();
+      window.setRefreshEnabled(!!activeProvider);
+    };
+
+    window.setConfigs = function(list, selectedIndex) {
+      configs = Array.isArray(list) ? list : [];
+      selectedConfigIndex = (typeof selectedIndex === 'number' && selectedIndex >= 0)
+        ? selectedIndex : -1;
+      pingResults = {};
+      renderConfigCard();
+      updateActivePing();
+      if (pickerMode === 'config') renderList();
+    };
+
+    /** Атомарный push от Python (providers + configs одним вызовом). */
+    window.applyAppState = function(state) {
+      if (!state || typeof state !== 'object') return;
+      providers = Array.isArray(state.providers) ? state.providers : [];
+      activeProvider = state.activeProvider || null;
+      configs = Array.isArray(state.configs) ? state.configs : [];
+      var si = state.selectedIndex;
+      selectedConfigIndex = (typeof si === 'number' && si >= 0) ? si : -1;
+      pingResults = {};
+      renderProviderCard();
+      renderConfigCard();
+      updateActivePing();
+      window.setRefreshEnabled(!!activeProvider);
+      if (pickerMode === 'provider' || pickerMode === 'config') renderList();
+    };
+
+    // setXrayStatus / setWindowVisible — мост из assets/cube (инжект Python)
+
+    window.showImportError = function(errorMsg) {
+      alert("Ошибка импорта: " + errorMsg);
+    };
+
+    function startPing(e) {
+      if (e) e.stopPropagation();
+      if (pingBusy) return;
+      if (!configs.length) return;
+      sendToPython({ action: "ping_all" });
+    }
+
+    window.setPingBusy = function(busy) {
+      pingBusy = !!busy;
+      const btn = document.getElementById('pingBtn');
+      if (btn) btn.classList.toggle('busy', pingBusy);
+    };
+
+    window.setPingReset = function() {
+      pingResults = {};
+      updateActivePing();
+      if (pickerMode === 'config') renderList();
+    };
+
+    window.setPingResult = function(index, ms) {
+      pingResults[index] = ms;
+      if (pickerMode === 'config') renderList();
+      updateActivePing();
+    };
+
+    function updateActivePing() {
+      const el = document.getElementById('activePing');
+      if (!el) return;
+      const has = Object.prototype.hasOwnProperty.call(pingResults, selectedConfigIndex);
+      if (selectedConfigIndex < 0 || !has) {
+        el.classList.remove('visible', 'good', 'mid', 'bad');
+        return;
+      }
+      const ms = pingResults[selectedConfigIndex];
+      el.classList.add('visible');
+      el.classList.remove('good', 'mid', 'bad');
+      if (ms == null) {
+        el.classList.add('bad');
+        el.textContent = '×';
+      } else {
+        el.classList.add(pingClass(ms));
+        el.textContent = ms + ' ms';
+      }
+    }
+
+    function openSettings() {
+      closePicker();
+      document.getElementById('settingsRoot').classList.add('open');
+    }
+    function closeSettings() {
+      const root = document.getElementById('settingsRoot');
+      if (root) root.classList.remove('open');
+    }
+
+    function sendSetting(key, value) {
+      sendToPython({ action: "update_setting", key: key, value: value });
+    }
+
+    (function bindSettings() {
+      const map = [
+        ['setLoglevel',       'xray_loglevel',                  'value'],
+        ['setLogRotate',      'xray_log_rotate_minutes',        'int'],
+        ['setNetWatch',       'network_watch_enabled',          'checked'],
+        ['setNetInterval',    'network_watch_interval',         'int'],
+        ['setAutoReconnect',  'network_auto_reconnect',         'checked'],
+        ['setRestartIface',   'network_restart_on_iface_change','checked'],
+        ['setPingUrl',        'ping_url',                       'url'],
+        ['setPingTimeout',    'ping_timeout',                   'int'],
+        ['setPingConcurrency','ping_concurrency',               'int'],
+      ];
+      map.forEach(([id, key, kind]) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.addEventListener('change', () => {
+          let value;
+          if (kind === 'checked') value = el.checked;
+          else if (kind === 'int') value = parseInt(el.value, 10);
+          else value = el.value.trim();
+
+          if (kind === 'int' && (!Number.isFinite(value) || value < 1)) {
+            el.focus();
+            return;
+          }
+          if (kind === 'url' && !/^https?:\/\//i.test(value)) {
+            el.focus();
+            return;
+          }
+          sendSetting(key, value);
+        });
+      });
+
+      const routingEl = document.getElementById('setRoutingSet');
+      if (routingEl) {
+        routingEl.addEventListener('change', () => {
+          const val = routingEl.value || '';
+          sendSetting('routing_set', val === '' ? null : val);
+          updateRoutingHint();
+        });
+      }
+    })();
+
+    function updateRoutingHint() {
+      const el = document.getElementById('setRoutingSet');
+      const hint = document.getElementById('routingSetHint');
+      if (!el || !hint) return;
+      const opt = el.options[el.selectedIndex];
+      if (opt && opt.title) {
+        hint.textContent = opt.title;
+      } else if (!el.value) {
+        hint.textContent = 'Выберите набор правил, чтобы направлять трафик по гео-признакам.';
+      } else {
+        hint.textContent = 'Правила набора будут применены к трафику туннеля.';
+      }
+    }
+
+    window.setRoutingSets = function(sets, active) {
+      const el = document.getElementById('setRoutingSet');
+      if (!el) return;
+      el.innerHTML = '';
+      const noneOpt = document.createElement('option');
+      noneOpt.value = '';
+      noneOpt.textContent = 'Без маршрутизации';
+      el.appendChild(noneOpt);
+
+      (sets || []).forEach(s => {
+        const o = document.createElement('option');
+        o.value = s.name;
+        o.textContent = s.title || s.name;
+        if (s.description) o.title = s.description;
+        el.appendChild(o);
+      });
+
+      el.value = active || '';
+      updateRoutingHint();
+    };
+
+    window.setSettings = function(cfg) {
+      if (!cfg || typeof cfg !== 'object') return;
+      const apply = (id, value, kind) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        if (kind === 'checked') el.checked = !!value;
+        else el.value = value;
+      };
+      apply('setLoglevel',      cfg.xray_loglevel || 'warning',               'value');
+      apply('setLogRotate',     cfg.xray_log_rotate_minutes ?? 10,            'value');
+      apply('setNetWatch',      cfg.network_watch_enabled !== false,          'checked');
+      apply('setNetInterval',   cfg.network_watch_interval ?? 2,              'value');
+      apply('setAutoReconnect', cfg.network_auto_reconnect !== false,         'checked');
+      apply('setRestartIface',  cfg.network_restart_on_iface_change !== false,'checked');
+      apply('setPingUrl',       cfg.ping_url || '',                           'value');
+      apply('setPingTimeout',   cfg.ping_timeout ?? 5,                        'value');
+      apply('setPingConcurrency', cfg.ping_concurrency ?? 8,                  'value');
+      const rs = document.getElementById('setRoutingSet');
+      if (rs && rs.options.length > 0) {
+        rs.value = cfg.routing_set || '';
+        updateRoutingHint();
+      }
+    };
+
+    renderProviderCard();
+    renderConfigCard();
+  </script>
+</body>
+</html>

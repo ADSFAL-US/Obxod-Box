@@ -1,0 +1,97 @@
+/* ── Obxod Cube — core styles ─────────────────────────────────────── */
+/* Анимации-акценты подключаются отдельно (animations/*.css), если нужны. */
+
+.face-area {
+  position: absolute;
+  top: 34%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.face-container {
+  position: relative;
+  transform: translate(var(--cube-x, 0px), var(--cube-y, 0px));
+  background: #3a3a3a;
+  border-radius: 30px;
+  padding: clamp(14px, 2.5vw, 24px);
+  cursor: pointer;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3);
+  will-change: transform;
+  z-index: 5;
+  transition: background 0.25s ease, box-shadow 0.25s ease;
+}
+
+.face-container:hover {
+  background: #454545;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.5);
+}
+
+.face-container:active {
+  transform: translate(var(--cube-x, 0px), var(--cube-y, 0px)) scale(0.97);
+}
+
+.face-square {
+  width: clamp(120px, 24vw, 240px);
+  height: clamp(120px, 24vw, 240px);
+  border: clamp(5px, 0.8vw, 8px) solid #aaa;
+  border-radius: 16px;
+  position: relative;
+  transition: border-color 0.3s ease, box-shadow 0.3s ease;
+}
+
+/* Status color holds (без loop-анимаций — их дают accent-модули) */
+.face-square.status-running {
+  border-color: #4ade80;
+  box-shadow: 0 0 20px rgba(74, 222, 128, 0.3);
+}
+.face-square.status-starting {
+  border-color: #fbbf24;
+}
+.face-square.status-error {
+  border-color: #ef4444;
+  box-shadow: 0 0 20px rgba(239, 68, 68, 0.3);
+}
+.face-square.status-network_down {
+  border-color: #fbbf24;
+  box-shadow: 0 0 20px rgba(251, 191, 36, 0.35);
+}
+
+.eye {
+  position: absolute;
+  width: clamp(16px, 3vw, 30px);
+  height: clamp(16px, 3vw, 30px);
+  background: #aaa;
+  border-radius: 50%;
+  top: 21%;
+  transform: translate(var(--eye-x, 0px), var(--eye-y, 0px));
+  will-change: transform;
+  transition: background 0.3s ease;
+}
+.eye.left { left: 21%; }
+.eye.right { right: 21%; }
+
+.status-running .eye { background: #4ade80; }
+.status-starting .eye { background: #fbbf24; }
+.status-error .eye { background: #ef4444; }
+.status-network_down .eye { background: #fbbf24; }
+
+/* Legacy loop classes — остаются для дефолтных accent-модулей */
+.face-container.status-starting {
+  animation: cube-pulse 1.4s ease-in-out infinite;
+}
+.face-container.status-network_down {
+  animation: cube-pulse-net 1.8s ease-in-out infinite;
+}
+
+@keyframes cube-pulse {
+  0%, 100% { box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3); }
+  50%      { box-shadow: 0 4px 24px rgba(251, 191, 36, 0.35); }
+}
+@keyframes cube-pulse-net {
+  0%, 100% { box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3); }
+  50%      { box-shadow: 0 4px 24px rgba(251, 191, 36, 0.45); }
+}
+
+@media (max-width: 520px), (max-height: 560px) {
+  .face-area { top: 30%; }
+}

@@ -1,0 +1,132 @@
+/* ── Connecting: 2 глаза → 3 точки → волна → обратно 2 глаза ─────── */
+
+.face-square.cube-connecting .eye {
+  /* чуть меньше исходных глаз */
+  width: clamp(12px, 2.4vw, 22px);
+  height: clamp(12px, 2.4vw, 22px);
+  top: 50%;
+  margin-top: calc(clamp(12px, 2.4vw, 22px) / -2);
+  /* глушим idle look-at во время акцента */
+  --eye-x: 0px !important;
+  --eye-y: 0px !important;
+  transition:
+    left 0.45s cubic-bezier(0.4, 0, 0.2, 1),
+    right 0.45s cubic-bezier(0.4, 0, 0.2, 1),
+    top 0.45s cubic-bezier(0.4, 0, 0.2, 1),
+    width 0.35s ease,
+    height 0.35s ease,
+    opacity 0.35s ease,
+    background 0.35s ease,
+    border-radius 0.35s ease,
+    transform 0.2s ease;
+  background: #fbbf24;
+  border-radius: 50%;
+}
+
+.face-square.cube-connecting .eye.left {
+  left: 18%;
+  right: auto;
+}
+
+.face-square.cube-connecting .eye.right {
+  right: 18%;
+  left: auto;
+}
+
+/* центральная точка — появляется «выливанием» из глаз */
+.face-square.cube-connecting .eye.center {
+  left: 50%;
+  right: auto;
+  transform: translateX(-50%);
+  opacity: 0;
+  width: 0;
+  height: 0;
+  margin-top: 0;
+}
+
+.face-square.cube-connecting.cube-connecting-ready .eye.center {
+  opacity: 1;
+  width: clamp(12px, 2.4vw, 22px);
+  height: clamp(12px, 2.4vw, 22px);
+  margin-top: calc(clamp(12px, 2.4vw, 22px) / -2);
+}
+
+/* волна вверх-вниз: фаза через animation-delay */
+.face-square.cube-connecting.cube-connecting-wave .eye {
+  animation: cube-dot-bounce 0.7s ease-in-out infinite;
+}
+.face-square.cube-connecting.cube-connecting-wave .eye.left {
+  animation-delay: 0s;
+}
+.face-square.cube-connecting.cube-connecting-wave .eye.center {
+  animation-delay: 0.12s;
+}
+.face-square.cube-connecting.cube-connecting-wave .eye.right {
+  animation-delay: 0.24s;
+}
+
+@keyframes cube-dot-bounce {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-10px); }
+}
+
+/* center в волне тоже центрирован по X */
+.face-square.cube-connecting.cube-connecting-wave .eye.center {
+  transform: translateX(-50%) translateY(0);
+}
+.face-square.cube-connecting.cube-connecting-wave .eye.center {
+  animation-name: cube-dot-bounce-center;
+}
+@keyframes cube-dot-bounce-center {
+  0%, 100% { transform: translateX(-50%) translateY(0); }
+  50%      { transform: translateX(-50%) translateY(-10px); }
+}
+
+/* выравнивание перед merge */
+.face-square.cube-connecting.cube-connecting-level .eye {
+  animation: none !important;
+  transform: none;
+}
+.face-square.cube-connecting.cube-connecting-level .eye.center {
+  transform: translateX(-50%);
+}
+
+/* merge: центр растворяется в боковые */
+.face-square.cube-connecting.cube-connecting-merge .eye.center {
+  opacity: 0;
+  width: 0;
+  height: 0;
+  margin-top: 0;
+  transition: all 0.4s ease;
+}
+.face-square.cube-connecting.cube-connecting-merge .eye.left,
+.face-square.cube-connecting.cube-connecting-merge .eye.right {
+  /* возврат к «глазным» позициям */
+  top: 21%;
+  margin-top: 0;
+  width: clamp(16px, 3vw, 30px);
+  height: clamp(16px, 3vw, 30px);
+  background: #4ade80;
+}
+
+.face-square.cube-connecting.cube-connecting-merge .eye.left {
+  left: 21%;
+}
+.face-square.cube-connecting.cube-connecting-merge .eye.right {
+  right: 21%;
+}
+
+/* рамка/контейнер в фазе connecting — янтарь */
+.face-container.cube-accent-connecting {
+  animation: cube-pulse 1.4s ease-in-out infinite;
+}
+.face-square.cube-connecting {
+  border-color: #fbbf24;
+}
+.face-square.cube-connecting.cube-connecting-done {
+  border-color: #4ade80;
+  box-shadow: 0 0 20px rgba(74, 222, 128, 0.35);
+}
+.face-square.cube-connecting.cube-connecting-done .eye {
+  background: #4ade80;
+}

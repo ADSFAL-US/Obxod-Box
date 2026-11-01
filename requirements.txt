@@ -1,0 +1,3 @@
+toga
+psutil
+pythonnet; sys_platform == "win32"

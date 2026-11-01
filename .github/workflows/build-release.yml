@@ -1,0 +1,108 @@
+name: Build Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: 'Version bump type'
+        type: choice
+        required: false
+        default: 'x'
+        options:
+          - x
+          - y
+          - z
+      no_installer:
+        description: 'Skip installer build'
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build Windows Release
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Need full history for version detection
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          architecture: 'x64'
+
+      - name: Install 7-Zip
+        run: |
+          choco install 7zip -y --no-progress
+          echo "C:\Program Files\7-Zip" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Build Release
+        id: build
+        run: |
+          $bump = "${{ github.event.inputs.bump }}"
+          $noInstaller = "${{ github.event.inputs.no_installer }}"
+          
+          $args = @()
+          if ($bump) { $args += "-Bump $bump" }
+          if ($noInstaller -eq 'true') { $args += "-NoInstaller" }
+          
+          Write-Host "Running mkbuild.ps1 with args: $args"
+          & .\mkbuild.ps1 @args
+
+      - name: Find built artifacts
+        id: artifacts
+        run: |
+          $bundleDir = ".\build-bundle"
+          $archives = Get-ChildItem -LiteralPath $bundleDir -Filter "obxod-box-*-windows.zip" | Sort-Object LastWriteTime -Descending
+          if ($archives.Count -eq 0) {
+            Write-Error "No release archives found in $bundleDir"
+            exit 1
+          }
+          $latest = $archives[0]
+          Write-Host "Latest archive: $($latest.Name)"
+          Write-Host "Archive path: $($latest.FullName)"
+          echo "archive_name=$($latest.Name)" >> $env:GITHUB_OUTPUT
+          echo "archive_path=$($latest.FullName)" >> $env:GITHUB_OUTPUT
+          
+          # Extract version from filename
+          if ($latest.Name -match 'obxod-box-(\d+\.\d+\.\d+)-windows\.zip') {
+            $version = $Matches[1]
+            echo "version=$version" >> $env:GITHUB_OUTPUT
+            Write-Host "Version: $version"
+          }
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        with:
+          tag_name: v${{ steps.artifacts.outputs.version }}
+          name: Release v${{ steps.artifacts.outputs.version }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: |
+            ${{ steps.artifacts.outputs.archive_path }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload artifact for manual download
+        uses: actions/upload-artifact@v4
+        with:
+          name: obxod-box-release-${{ steps.artifacts.outputs.version }}
+          path: ${{ steps.artifacts.outputs.archive_path }}
+          retention-days: 90

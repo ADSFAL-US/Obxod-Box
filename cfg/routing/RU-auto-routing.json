@@ -1,0 +1,62 @@
+{
+  "name": "RKN Whitelist",
+  "description": "Белый список: через туннель идут только заблокированные в РФ и ушедшие из РФ сервисы. Остальной трафик — напрямую.",
+  "domainStrategy": "IPIfNonMatch",
+  "rules": [
+    {
+      "type": "field",
+      "domain": ["geosite:category-ads-all"],
+      "outbound": "block",
+      "note": "Реклама и трекеры — блокируем"
+    },
+    {
+      "type": "field",
+      "domain": [
+        "geosite:openai",
+        "geosite:google-gemini"
+      ],
+      "outbound": "proxy",
+      "note": "AI-сервисы: OpenAI (ChatGPT), Gemini"
+    },
+    {
+      "type": "field",
+      "domain": ["geosite:telegram"],
+      "outbound": "proxy",
+      "note": "Telegram — домены"
+    },
+    {
+      "type": "field",
+      "ip": ["geoip:telegram"],
+      "outbound": "proxy",
+      "note": "Telegram — IP-пулы (DC, MTProto)"
+    },
+    {
+      "type": "field",
+      "domain": [
+        "geosite:instagram",
+        "geosite:facebook",
+        "geosite:twitter",
+        "geosite:tiktok",
+        "geosite:discord",
+        "geosite:reddit"
+      ],
+      "outbound": "proxy",
+      "note": "Заблокированные в РФ соцсети"
+    },
+    {
+      "type": "field",
+      "domain": [
+        "geosite:netflix",
+        "geosite:spotify"
+      ],
+      "outbound": "proxy",
+      "note": "Стриминг и видео, ушедшие из РФ"
+    },
+    {
+      "type": "field",
+      "network": "tcp,udp",
+      "outbound": "direct",
+      "note": "Всё остальное — напрямую"
+    }
+  ]
+}

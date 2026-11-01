@@ -215,11 +215,15 @@ Write-Host "Финальный архив: $finalArchivePath ($([math]::Round((G
 # ============================================================
 Write-Host "`n========== КОПИРОВАНИЕ АРТЕФАКТОВ ДЛЯ РЕЛИЗА =========="
 
-# Копируем установщик в build-bundle
+# Копируем установщик в build-bundle (если он не там уже)
 if ($installerExe -and (Test-Path -LiteralPath $installerExe)) {
     $installerReleasePath = Join-Path $BundleDir "Obxod-BOX-Setup-v$newVersion.exe"
-    Copy-Item -LiteralPath $installerExe -Destination $installerReleasePath -Force
-    Write-Host "Установщик скопирован: $installerReleasePath"
+    if (-not (Test-Path -LiteralPath $installerReleasePath) -or (Resolve-Path $installerExe) -ne (Resolve-Path $installerReleasePath)) {
+        Copy-Item -LiteralPath $installerExe -Destination $installerReleasePath -Force
+        Write-Host "Установщик скопирован: $installerReleasePath"
+    } else {
+        Write-Host "Установщик уже в build-bundle: $installerReleasePath"
+    }
 }
 
 # Копируем бандл в build-bundle

@@ -62,8 +62,9 @@ jobs:
           if ($bump) { $args += "-Bump $bump" }
           if ($noInstaller -eq 'true') { $args += "-NoInstaller" }
           
-          Write-Host "Running mkbuild.ps1 with args: $args"
-          & .\mkbuild.ps1 @args
+                Write-Host "Working directory: $(Get-Location)"
+                Write-Host "Running mkbuild.ps1 with args: $args"
+                & "${{ github.workspace }}\mkbuild.ps1" @args
 
       - name: Find built artifacts
         id: artifacts

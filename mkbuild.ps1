@@ -211,6 +211,24 @@ Add-Type -AssemblyName System.IO.Compression.FileSystem
 Write-Host "Финальный архив: $finalArchivePath ($([math]::Round((Get-Item $finalArchivePath).Length/1MB, 2)) MB)"
 
 # ============================================================
+# КОПИРУЕМ УСТАНОВЩИК И БАНДЛ В build-bundle ДЛЯ РЕЛИЗА
+# ============================================================
+Write-Host "`n========== КОПИРОВАНИЕ АРТЕФАКТОВ ДЛЯ РЕЛИЗА =========="
+
+# Копируем установщик в build-bundle
+if ($installerExe -and (Test-Path -LiteralPath $installerExe)) {
+    $installerReleasePath = Join-Path $BundleDir "Obxod-BOX-Setup-v$newVersion.exe"
+    Copy-Item -LiteralPath $installerExe -Destination $installerReleasePath -Force
+    Write-Host "Установщик скопирован: $installerReleasePath"
+}
+
+# Копируем бандл в build-bundle
+$bundleReleasePath = Join-Path $BundleDir "obxod-box-v$newVersion"
+if (Test-Path -LiteralPath $bundleReleasePath) { Remove-Item -LiteralPath $bundleReleasePath -Recurse -Force }
+Copy-Item -LiteralPath $dest -Destination $bundleReleasePath -Recurse -Force
+Write-Host "Бандл скопирован: $bundleReleasePath"
+
+# ============================================================
 # 4. ОЧИСТКА ТОЛЬКО ВРЕМЕННЫХ ФАЙЛОВ ТЕКУЩЕЙ СБОРКИ
 # ============================================================
 Write-Host "`n========== ОЧИСТКА ВРЕМЕННЫХ ФАЙЛОВ =========="
@@ -221,19 +239,18 @@ Remove-Item -LiteralPath $finalTempDir -Recurse -Force -ErrorAction SilentlyCont
 
 # Удаляем временные файлы сборки установщика из build-bundle (sfx_build_*, spec файлы)
 # НЕ трогаем никакие релизы (obxod-box-*-windows.zip, release-v*.zip) - они остаются навсегда
+# НЕ трогаем артефакты релиза (Obxod-BOX-Setup-v*.exe, obxod-box-v*/) - они нужны для GitHub Release
 $tempPatterns = @(
     "sfx_build_*",
     "final_*",
     "*.spec",
     "payload.zip",
     "payload-v*.zip",
-    "Obxod-BOX-Setup-v*.bat",
-    "Obxod-BOX-Setup-v*.exe"
+    "Obxod-BOX-Setup-v*.bat"
 )
 
 foreach ($pattern in $tempPatterns) {
     Get-ChildItem -LiteralPath $BundleDir -Filter $pattern -ErrorAction SilentlyContinue | 
-    Where-Object { -not ($_.Name -like "obxod-box-*-windows.zip") -and -not ($_.Name -like "release-v*.zip") } |
     Remove-Item -Force -Recurse -ErrorAction SilentlyContinue
 }
 

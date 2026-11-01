@@ -103,24 +103,39 @@ jobs:
             echo "version=$version" >> $env:GITHUB_OUTPUT
             Write-Host "Version: $version"
           }
+          
+                # Also find individual installer and bundle
+                $installer = Get-ChildItem -LiteralPath $bundleDir -Filter "Obxod-BOX-Setup-v$version.exe" | Select-Object -First 1
+                if ($installer) {
+                  echo "installer_path=$($installer.FullName)" >> $env:GITHUB_OUTPUT
+                  Write-Host "Installer: $($installer.FullName)"
+                }
+                $bundleDirPath = Join-Path $bundleDir "obxod-box-v$version"
+                if (Test-Path -LiteralPath $bundleDirPath) {
+                  echo "bundle_path=$bundleDirPath" >> $env:GITHUB_OUTPUT
+                  Write-Host "Bundle dir: $bundleDirPath"
+                }
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
-        with:
-          tag_name: v${{ steps.artifacts.outputs.version }}
-          name: Release v${{ steps.artifacts.outputs.version }}
-          draft: false
-          prerelease: false
-          generate_release_notes: true
-          files: |
-            ${{ steps.artifacts.outputs.archive_path }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            - name: Create GitHub Release
+              uses: softprops/action-gh-release@v2
+              if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+              with:
+                tag_name: v${{ steps.artifacts.outputs.version }}
+                name: Release v${{ steps.artifacts.outputs.version }}
+                draft: false
+                prerelease: false
+                generate_release_notes: true
+                files: |
+                  ${{ steps.artifacts.outputs.installer_path }}
+                  ${{ steps.artifacts.outputs.bundle_path }}
+              env:
+                GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload artifact for manual download
-        uses: actions/upload-artifact@v4
-        with:
-          name: obxod-box-release-${{ steps.artifacts.outputs.version }}
-          path: ${{ steps.artifacts.outputs.archive_path }}
-          retention-days: 90
+            - name: Upload artifacts for manual download
+              uses: actions/upload-artifact@v4
+              with:
+                name: obxod-box-release-${{ steps.artifacts.outputs.version }}
+                path: |
+                  ${{ steps.artifacts.outputs.installer_path }}
+                  ${{ steps.artifacts.outputs.bundle_path }}
+                retention-days: 90

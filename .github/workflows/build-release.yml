@@ -105,12 +105,13 @@ jobs:
           $bump = if ($env:BUMP_TYPE) { $env:BUMP_TYPE } else { "x" }
           $noInstaller = $env:NO_INSTALLER
 
-          $buildArgs = @("-BaseVersion", $latestVersion, "-Bump", $bump)
-          if ($noInstaller -eq 'true') { $buildArgs += "-NoInstaller" }
-
           Write-Host "Working directory: $(Get-Location)"
-          Write-Host "Running mkbuild.ps1 with args: $buildArgs"
-          & "${{ github.workspace }}\mkbuild.ps1" @buildArgs
+          Write-Host "Building from v$latestVersion with bump '$bump'"
+          if ($noInstaller -eq 'true') {
+            & "${{ github.workspace }}\mkbuild.ps1" -BaseVersion $latestVersion -Bump $bump -NoInstaller
+          } else {
+            & "${{ github.workspace }}\mkbuild.ps1" -BaseVersion $latestVersion -Bump $bump
+          }
 
           $p = $latestVersion.Split('.')
           $z = [int]$p[0]; $y = [int]$p[1]; $x = [int]$p[2]

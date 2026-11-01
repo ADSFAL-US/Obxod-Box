@@ -3,7 +3,8 @@
 param(
     [switch]$NoInstaller,  # Пропустить сборку установщика
     [ValidateSet('z','y','x')]
-    [string]$Bump = 'x'    # Какую часть версии поднять (z/y/x) — для неинтерактивного режима
+    [string]$Bump = 'x',    # Какую часть версии поднять (z/y/x) — для неинтерактивного режима
+    [string]$BaseVersion = ''  # Базовая версия из GitHub (переопределяет локальный поиск)
 )
 
 $ErrorActionPreference = 'Stop'
@@ -15,22 +16,31 @@ $IgnoreFile = './.buildignore'
 New-Item -ItemType Directory -Force -Path $BuildDir  | Out-Null
 New-Item -ItemType Directory -Force -Path $BundleDir | Out-Null
 
-# --- поиск последней версии в build/ и build-bundle/ ---
-$versions = @()
-foreach ($d in Get-ChildItem -LiteralPath $BuildDir -Directory -ErrorAction SilentlyContinue) {
-    if ($d.Name -match '^release-v(\d+\.\d+\.\d+)$') { $versions += $Matches[1] }
-}
-foreach ($f in Get-ChildItem -LiteralPath $BundleDir -File -ErrorAction SilentlyContinue) {
-    if ($f.Name -match '^obxod-box-(\d+\.\d+\.\d+)-windows\.zip$') { $versions += $Matches[1] }
-}
+# --- поиск последней версии ---
+$latest = '0.0.0'
 
-$sorted = @($versions | Select-Object -Unique | Sort-Object { [version]$_ })
-$latest = if ($sorted.Count -gt 0) { $sorted[-1] } else { '0.0.0' }
-
-if ($sorted.Count -gt 0) {
-    Write-Host "Последняя найденная версия: v$latest"
+if ($BaseVersion) {
+    # Используем версию из GitHub (передается через workflow)
+    $latest = $BaseVersion
+    Write-Host "Использую версию из GitHub: v$latest"
 } else {
-    Write-Host "Предыдущих релизов нет, стартуем с v$latest"
+    # Локальный поиск (для ручной сборки)
+    $versions = @()
+    foreach ($d in Get-ChildItem -LiteralPath $BuildDir -Directory -ErrorAction SilentlyContinue) {
+        if ($d.Name -match '^release-v(\d+\.\d+\.\d+)$') { $versions += $Matches[1] }
+    }
+    foreach ($f in Get-ChildItem -LiteralPath $BundleDir -File -ErrorAction SilentlyContinue) {
+        if ($f.Name -match '^obxod-box-(\d+\.\d+\.\d+)-windows\.zip$') { $versions += $Matches[1] }
+    }
+
+    $sorted = @($versions | Select-Object -Unique | Sort-Object { [version]$_ })
+    if ($sorted.Count -gt 0) { $latest = $sorted[-1] }
+    
+    if ($sorted.Count -gt 0) {
+        Write-Host "Последняя найденная версия локально: v$latest"
+    } else {
+        Write-Host "Предыдущих релизов нет, стартуем с v$latest"
+    }
 }
 
 # --- выбор какой компонент поднять ---

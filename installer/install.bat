@@ -4,22 +4,9 @@ title Obxod-BOX Setup
 setlocal EnableDelayedExpansion
 
 set "SILENT=0"
-set "INSTALL_DIR="
+if /i "%~1"=="--silent" set "SILENT=1"
 
-:parse_args
-if "%~1"=="" goto :args_done
-if /i "%~1"=="--silent" set "SILENT=1" & shift & goto :parse_args
-if /i "%~1"=="--install-dir" set "INSTALL_DIR=%~2" & shift & shift & goto :parse_args
-shift
-goto :parse_args
-:args_done
-
-rem --- Определяем корень установки ---
-if not defined INSTALL_DIR (
-    set "ROOT=%~dp0"
-) else (
-    set "ROOT=%INSTALL_DIR%"
-)
+set "ROOT=%~dp0"
 if "%ROOT:~-1%"=="\" set "ROOT=%ROOT:~0,-1%"
 
 set "PY=%ROOT%\runtime\python.exe"

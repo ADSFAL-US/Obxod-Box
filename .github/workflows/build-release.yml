@@ -69,29 +69,8 @@ jobs:
       - name: Install tkinter into embeddable runtime
         run: |
           $runtimeDir = "runtime"
-          $tclUrl = "https://www.python.org/ftp/python/3.11.9/windows/AMD64/python-3.11.9-amd64.exe"
-          $installer = "python-full-installer.exe"
-          Write-Host "Downloading full Python installer to extract tkinter/tcl..."
-          Invoke-WebRequest -Uri $tclUrl -OutFile $installer
-          # 7z can extract the Python Windows installer .exe
-          & "C:\Program Files\7-Zip\7z.exe" x $installer -opy-full-tmp -y | Out-Null
-          # Find the extracted python directory (7z may create a subfolder)
-          $pyDir = Get-ChildItem -LiteralPath "py-full-tmp" -Directory | Select-Object -First 1
-          if (-not $pyDir) { $pyDir = Get-Item "py-full-tmp" }
-          Write-Host "Extracted Python dir: $($pyDir.FullName)"
-          # Copy tcl/tk libraries
-          Copy-Item -LiteralPath (Join-Path $pyDir.FullName "tcl") -Destination "$runtimeDir/tcl" -Recurse -Force
-          Copy-Item -LiteralPath (Join-Path $pyDir.FullName "tk8.6") -Destination "$runtimeDir/tk8.6" -Recurse -Force
-          # Copy tkinter package
-          Copy-Item -LiteralPath (Join-Path $pyDir.FullName "Lib" "tkinter") -Destination "$runtimeDir/Lib/tkinter" -Recurse -Force
-          Copy-Item -LiteralPath (Join-Path $pyDir.FullName "Lib" "tkinter.ttk") -Destination "$runtimeDir/Lib/tkinter.ttk" -Recurse -Force
-          Copy-Item -LiteralPath (Join-Path $pyDir.FullName "Lib" "tkinter" "__init__.py") -Destination "$runtimeDir/Lib/tkinter/__init__.py" -Force
-          # Copy DLLs
-          Copy-Item -LiteralPath (Join-Path $pyDir.FullName "tcl86t.dll") -Destination "$runtimeDir/tcl86t.dll" -Force
-          Copy-Item -LiteralPath (Join-Path $pyDir.FullName "tk86t.dll") -Destination "$runtimeDir/tk86t.dll" -Force
-          Copy-Item -LiteralPath (Join-Path $pyDir.FullName "_tkinter.pyd") -Destination "$runtimeDir/_tkinter.pyd" -Force
-          Remove-Item "py-full-tmp" -Recurse -Force
-          Remove-Item $installer -Force
+          Write-Host "Installing tkinter-embed into embeddable runtime..."
+          .\runtime\python.exe -m pip install tkinter-embed --target "$runtimeDir"
           Write-Host "tkinter installed into embeddable runtime"
 
       - name: Determine bump type

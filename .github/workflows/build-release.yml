@@ -66,17 +66,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Install pip into embeddable runtime
-        run: |
-          Write-Host "Installing pip into embeddable runtime..."
-          .\runtime\python.exe runtime/get-pip.py -q
-          Write-Host "pip installed"
-
       - name: Install tkinter into embeddable runtime
         run: |
           $runtimeDir = "runtime"
-          Write-Host "Installing tkinter-embed into embeddable runtime..."
-          & "$runtimeDir\Scripts\pip.exe" install tkinter-embed --target "$runtimeDir"
+          Write-Host "Installing tkinter-embed into embeddable runtime using system Python..."
+          python -m pip install tkinter-embed --target "$runtimeDir"
           Write-Host "tkinter installed into embeddable runtime"
 
       - name: Determine bump type

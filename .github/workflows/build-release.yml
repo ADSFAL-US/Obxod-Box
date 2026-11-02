@@ -73,18 +73,23 @@ jobs:
           $installer = "python-full-installer.exe"
           Write-Host "Downloading full Python installer to extract tkinter/tcl..."
           Invoke-WebRequest -Uri $tclUrl -OutFile $installer
-          Expand-Archive -Path $installer -DestinationPath "py-full-tmp" -Force
+          # 7z can extract the Python Windows installer .exe
+          & "C:\Program Files\7-Zip\7z.exe" x $installer -opy-full-tmp -y | Out-Null
+          # Find the extracted python directory (7z may create a subfolder)
+          $pyDir = Get-ChildItem -LiteralPath "py-full-tmp" -Directory | Select-Object -First 1
+          if (-not $pyDir) { $pyDir = Get-Item "py-full-tmp" }
+          Write-Host "Extracted Python dir: $($pyDir.FullName)"
           # Copy tcl/tk libraries
-          Copy-Item -LiteralPath "py-full-tmp/tcl" -Destination "$runtimeDir/tcl" -Recurse -Force
-          Copy-Item -LiteralPath "py-full-tmp/tk8.6" -Destination "$runtimeDir/tk8.6" -Recurse -Force
+          Copy-Item -LiteralPath (Join-Path $pyDir.FullName "tcl") -Destination "$runtimeDir/tcl" -Recurse -Force
+          Copy-Item -LiteralPath (Join-Path $pyDir.FullName "tk8.6") -Destination "$runtimeDir/tk8.6" -Recurse -Force
           # Copy tkinter package
-          Copy-Item -LiteralPath "py-full-tmp/Lib/tkinter" -Destination "$runtimeDir/Lib/tkinter" -Recurse -Force
-          Copy-Item -LiteralPath "py-full-tmp/Lib/tkinter.ttk" -Destination "$runtimeDir/Lib/tkinter.ttk" -Recurse -Force
-          Copy-Item -LiteralPath "py-full-tmp/Lib/tkinter/__init__.py" -Destination "$runtimeDir/Lib/tkinter/__init__.py" -Force
+          Copy-Item -LiteralPath (Join-Path $pyDir.FullName "Lib" "tkinter") -Destination "$runtimeDir/Lib/tkinter" -Recurse -Force
+          Copy-Item -LiteralPath (Join-Path $pyDir.FullName "Lib" "tkinter.ttk") -Destination "$runtimeDir/Lib/tkinter.ttk" -Recurse -Force
+          Copy-Item -LiteralPath (Join-Path $pyDir.FullName "Lib" "tkinter" "__init__.py") -Destination "$runtimeDir/Lib/tkinter/__init__.py" -Force
           # Copy DLLs
-          Copy-Item -LiteralPath "py-full-tmp/tcl86t.dll" -Destination "$runtimeDir/tcl86t.dll" -Force
-          Copy-Item -LiteralPath "py-full-tmp/tk86t.dll" -Destination "$runtimeDir/tk86t.dll" -Force
-          Copy-Item -LiteralPath "py-full-tmp/_tkinter.pyd" -Destination "$runtimeDir/_tkinter.pyd" -Force
+          Copy-Item -LiteralPath (Join-Path $pyDir.FullName "tcl86t.dll") -Destination "$runtimeDir/tcl86t.dll" -Force
+          Copy-Item -LiteralPath (Join-Path $pyDir.FullName "tk86t.dll") -Destination "$runtimeDir/tk86t.dll" -Force
+          Copy-Item -LiteralPath (Join-Path $pyDir.FullName "_tkinter.pyd") -Destination "$runtimeDir/_tkinter.pyd" -Force
           Remove-Item "py-full-tmp" -Recurse -Force
           Remove-Item $installer -Force
           Write-Host "tkinter installed into embeddable runtime"

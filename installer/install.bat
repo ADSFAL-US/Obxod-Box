@@ -43,6 +43,11 @@ set "BOOT=import sys,os,inspect;r=os.environ['OBX_ROOT'];sys.path[:0]=[r,os.path
 
 "%PY%" -c "%BOOT%"
 set "RC=%ERRORLEVEL%"
+if %RC% NEQ 0 (
+    echo.
+    echo ОШИБКА: установщик завершился с кодом %RC%
+    if "%SILENT%"=="0" pause
+)
 endlocal & exit /b %RC%
 
 endlocal & exit /b %RC%

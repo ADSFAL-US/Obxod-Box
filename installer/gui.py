@@ -1,22 +1,17 @@
 """
 GUI Installer for Obxod-BOX using tkinter.
 """
-import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
-import threading
 import sys
+import threading
+import tkinter as tk
 from pathlib import Path
+from tkinter import filedialog, messagebox, ttk
 from typing import Optional
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from installer.core import (
-    ObxodBoxInstaller, 
-    InstallConfig, 
-    InstallMode, 
-    InstallerError
-)
+from installer.core import InstallConfig, InstallerError, InstallMode, ObxodBoxInstaller
 
 
 class InstallerGUI:

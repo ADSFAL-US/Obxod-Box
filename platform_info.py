@@ -20,7 +20,7 @@ def get_platform() -> Platform:
     # Android/iOS via BeeWare: sys.platform is still linux/darwin, but
     # toga/android markers or env may be set. Detect common cases.
     try:
-        import toga  : F401
+        import toga
         # Briefcase sets these
         import os
         if os.environ.get("BRIEFCASE_PLATFORM") == "android" or "ANDROID_ARGUMENT" in os.environ:

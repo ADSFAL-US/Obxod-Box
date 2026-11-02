@@ -141,11 +141,7 @@ jobs:
           $newVersion = "$z.$y.$x"
           Write-Host "Computed new version: v$newVersion (bump: $bump)"
 
-          $content = @"
-"""Версия приложения Obxod-BOX."""
-
-__version__ = "$newVersion"
-"@
+          $content = """Версия приложения Obxod-BOX.""" + "`n`n__version__ = `"$newVersion`"" + "`n"
           Set-Content -Path "version.py" -Value $content -Encoding utf8
           Write-Host "Written __version__ = $newVersion to version.py"
 

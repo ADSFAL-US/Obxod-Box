@@ -72,23 +72,15 @@ endlocal & exit /b %RC%
 
 :silent_install
 rem --- Тихая установка без GUI ---
-rem --- SFX_ROOT — временная папка SFX (где извлечены runtime, installer, payload)
-rem --- ROOT — целевая папка установки клиента
-set "SFX_ROOT=%~dp0"
-if "%SFX_ROOT:~-1%"=="\" set "SFX_ROOT=%SFX_ROOT:~0,-1%"
-
-echo [1/4] Копирую рантайм из SFX в целевую папку...
-if not exist "%ROOT%\runtime" mkdir "%ROOT%\runtime"
-xcopy /e /i /q "%SFX_ROOT%\runtime" "%ROOT%\runtime\"
-
-echo [2/4] Копирую файлы установки...
+rem --- ROOT — целевая папка установки клиента (передан через --install-dir)
+echo [1/4] Копирую файлы установки...
 "%PY%" -c "import sys,os;r=os.environ['OBX_ROOT'];sys.path[:0]=[r,os.path.join(r,'runtime'),os.path.join(r,'runtime','Lib'),os.path.join(r,'runtime','Lib','site-packages'),os.path.join(r,'runtime','DLLs')];from installer.core import ObxodBoxInstaller, InstallConfig, InstallMode;from pathlib import Path;c=InstallConfig(install_path=Path(r),create_shortcut=False,create_desktop_shortcut=False,create_start_menu_shortcut=False,run_after_install=False,mode=InstallMode.CLI,silent=True,no_shortcuts=(os.environ.get('OBX_NO_SHORTCUTS')=='1'),restart_after_install=(os.environ.get('OBX_RESTART')=='1'));i=ObxodBoxInstaller(c);i.install(Path(os.environ['OBX_PAYLOAD']))"
 set "RC=%ERRORLEVEL%"
 
 if "%RC%"=="0" (
     echo [OK] Установка завершена успешно.
     if "%RESTART%"=="1" (
-        echo [3/4] Перезапускаю приложение...
+        echo [2/4] Перезапускаю приложение...
         start "" "%ROOT%\start.bat"
     )
 ) else (
@@ -97,7 +89,7 @@ if "%RC%"=="0" (
 
 rem --- Самоудаление установщика ---
 if exist "%INSTALLER_EXE%" (
-    echo [4/4] Удаляю установщик...
+    echo [3/4] Удаляю установщик...
     set "DELETE_BAT=%TEMP%\obxod_delete_%RANDOM%.bat"
     echo @echo off > "%DELETE_BAT%"
     echo :wait_loop >> "%DELETE_BAT%"

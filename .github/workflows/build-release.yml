@@ -79,14 +79,14 @@ jobs:
               $mergeCommits = [int](git rev-list --count ^HEAD^1 HEAD)
               Write-Host "Merge commit detected with $mergeCommits commits in branch"
               if ($mergeCommits -gt 20) {
-                $bump = "x"
+                  $bump = "z"
                 Write-Host "More than 20 commits -> MAJOR bump (x+1)"
               } else {
                 $bump = "y"
                 Write-Host "20 or fewer commits -> MINOR bump (y+1)"
               }
             } else {
-              $bump = "z"
+                $bump = "x"
               Write-Host "Direct commit -> PATCH bump (z+1)"
             }
           }

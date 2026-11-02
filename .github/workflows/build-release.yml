@@ -66,6 +66,12 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Ensure pip in embeddable runtime
+        run: |
+          Write-Host "Ensuring pip is installed in embeddable runtime..."
+          .\runtime\python.exe runtime/get-pip.py -q
+          Write-Host "pip ready in embeddable runtime"
+
       - name: Install tkinter into embeddable runtime
         run: |
           $runtimeDir = "runtime"

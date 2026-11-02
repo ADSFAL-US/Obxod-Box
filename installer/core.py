@@ -38,6 +38,8 @@ class InstallConfig:
     run_after_install: bool = False
     mode: InstallMode = InstallMode.GUI
     silent: bool = False
+    no_shortcuts: bool = False
+    restart_after_install: bool = False
 
 
 class InstallerError(Exception):
@@ -367,6 +369,28 @@ $shortcut.Save()
                 logger.info(f"Cleaned up temp directory: {self.temp_dir}")
             except Exception as e:
                 logger.warning(f"Failed to clean up temp directory: {e}")
+
+    def _self_delete(self) -> None:
+        """Удаляет сам установщик после завершения установки.
+
+        Используется в сценарии автообновления: установщик запускает себя,
+        устанавливает файлы, а затем удаляет свой EXE.
+        """
+        try:
+            # Установщик запущен из своего EXE, удаляем его
+            installer_exe = Path(sys.argv[0])
+            if installer_exe.exists() and installer_exe.suffix.lower() == ".exe":
+                # Откладываем удаление, чтобы процесс успел завершиться
+                import threading
+                def delayed_delete():
+                    try:
+                        installer_exe.unlink()
+                        logger.info("Установщик удален сам себя: %s", installer_exe)
+                    except Exception as e:
+                        logger.warning("Не удалось удалить установщик: %s", e)
+                threading.Timer(2.0, delayed_delete).start()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Ошибка при самоудалении установщика: %s", e)
     
     def install(self, payload_path: Path) -> bool:
         """Main installation routine."""
@@ -388,18 +412,24 @@ $shortcut.Save()
             # Install files
             self.install_files()
             
-            # Create shortcuts
-            self.create_shortcuts()
+            # Create shortcuts (skip if no_shortcuts or silent)
+            if not self.config.no_shortcuts and not self.config.silent:
+                self.create_shortcuts()
             
             # Create uninstaller
             self.create_uninstaller()
             
             # Verify
-            if not self.verify_installation():
-                raise InstallerError("Installation verification failed")
+            if not self.config.silent:
+                if not self.verify_installation():
+                    raise InstallerError("Installation verification failed")
             
             # Post-install
             self.run_post_install()
+            
+            # Self-delete installer if requested (auto-update scenario)
+            if self.config.silent:
+                self._self_delete()
             
             logger.info(f"Installation {'updated' if is_update else 'completed'} successfully!")
             return True
@@ -420,7 +450,9 @@ def create_installer_config(
     create_start_menu_shortcut: bool = True,
     run_after_install: bool = False,
     mode: InstallMode = InstallMode.GUI,
-    silent: bool = False
+    silent: bool = False,
+    no_shortcuts: bool = False,
+    restart_after_install: bool = False,
 ) -> InstallConfig:
     """Factory function to create install config."""
     return InstallConfig(
@@ -430,5 +462,7 @@ def create_installer_config(
         create_start_menu_shortcut=create_start_menu_shortcut,
         run_after_install=run_after_install,
         mode=mode,
-        silent=silent
+        silent=silent,
+        no_shortcuts=no_shortcuts,
+        restart_after_install=restart_after_install,
     )

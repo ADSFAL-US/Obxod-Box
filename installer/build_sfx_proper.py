@@ -37,7 +37,7 @@ class SevenZipSFXBuilder:
             "network_watcher.py","platform_info.py","platform_tray.py",
             "xray_manager.py","xray_supervisor.py","loading_window.py",
             "start.bat","start.sh","requirements.txt",
-            "assets"]
+            "assets","version.py"]
         skip = {"__pycache__",".pyc",".pyo",".pyd",".venv","venv","build","build-bundle",
             ".git",".idea",".vscode","logs",".log","mkbuild.ps1",".buildignore",
             "bin","cfg","geo","runtime"}  # Explicitly exclude these dirs

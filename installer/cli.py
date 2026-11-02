@@ -100,6 +100,12 @@ Examples:
     )
 
     parser.add_argument(
+        "--restart",
+        action="store_true",
+        help="Restart application after installation (used by auto-update)"
+    )
+
+    parser.add_argument(
         "--verify-only",
         action="store_true",
         help="Only verify existing installation, don't install"
@@ -284,7 +290,9 @@ def main():
         create_start_menu_shortcut=args.start_menu_shortcut,
         run_after_install=args.run_after,
         mode=InstallMode.CLI,
-        silent=args.silent
+        silent=args.silent,
+        no_shortcuts=args.no_shortcuts,
+        restart_after_install=args.restart,
     )
 
     # Create installer

@@ -28,6 +28,8 @@ DEFAULTS: dict[str, Any] = {
     "ping_concurrency": 8,
     # ── роутинг ──
     "routing_set": "RU-auto-routing",
+    # ── автообновления ──
+    "auto_update_enabled": True,
 }
 
 

@@ -104,8 +104,6 @@ Title="Установка {self.app_name} v{self.version}"
                 archive_path = self.output_dir / f"archive-v{self.version}.7z"
                 r = subprocess.run([
                     str(self.seven_zip), "a",
-                    "-mx=9", "-ms=on", "-mmt=on",
-                    "-t7z",
                     str(archive_path),
                     str(tmp_path / "installer"),
                     str(tmp_path / "runtime"),

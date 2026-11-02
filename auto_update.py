@@ -129,7 +129,7 @@ def check_for_update(current_version: str) -> Optional[dict]:
             "no_installer_for_platform": True,
         }
 
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.error("Ошибка при проверке обновлений: %s", exc)
         return None
 
@@ -158,7 +158,7 @@ def download_installer(
             if total > 0 and downloaded > total:
                 downloaded = total
             progress_cb(int(downloaded), int(total))
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
 
     urllib.request.urlretrieve(url, dest_path, reporthook=hook)

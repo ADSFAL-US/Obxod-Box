@@ -254,7 +254,7 @@ class MainWindow:
                     (screen.size.width - window_size[0]) // 2,
                     (screen.size.height - window_size[1]) // 2,
                 )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  : BLE001
             logger.debug("main window center skipped: %s", exc)
         try:
             self.window.hide()

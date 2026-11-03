@@ -54,11 +54,24 @@ jobs:
           Invoke-WebRequest -Uri $runtimeUrl -OutFile $runtimeZip
           Write-Host "Extracting runtime..."
           Expand-Archive -Path $runtimeZip -DestinationPath runtime -Force
-          Invoke-WebRequest -Uri "https://bootstrap.pypa.io/get-pip.py" -OutFile "runtime/get-pip.py"
-          cd runtime
-          .\python.exe get-pip.py
-          cd ..
           Remove-Item $runtimeZip
+
+          # Embeddable builds ignore PYTHONPATH; site-packages must be listed in the ._pth file.
+          $pth = Get-ChildItem -LiteralPath "runtime" -Filter "python*._pth" | Select-Object -First 1
+          if (-not $pth) { throw "python*._pth not found in runtime" }
+          $pthLines = Get-Content -LiteralPath $pth.FullName
+          if ($pthLines -notcontains "Lib\site-packages") {
+            Add-Content -LiteralPath $pth.FullName -Value "Lib\site-packages"
+          }
+          if ($pthLines -notcontains "import site") {
+            Add-Content -LiteralPath $pth.FullName -Value "import site"
+          }
+          New-Item -ItemType Directory -Force -Path "runtime\Lib\site-packages" | Out-Null
+
+          Invoke-WebRequest -Uri "https://bootstrap.pypa.io/get-pip.py" -OutFile "runtime/get-pip.py"
+          & ".\runtime\python.exe" "runtime/get-pip.py" --no-warn-script-location
+          if ($LASTEXITCODE -ne 0) { throw "get-pip.py failed with exit code $LASTEXITCODE" }
+          Remove-Item "runtime/get-pip.py"
           Write-Host "Runtime ready at $(Get-Location)/runtime"
 
       - name: Install Python dependencies
@@ -72,6 +85,18 @@ jobs:
           Write-Host "Installing tkinter-embed into embeddable runtime using system Python..."
           python -m pip install tkinter-embed --target "$runtimeDir"
           Write-Host "tkinter installed into embeddable runtime"
+
+      - name: Install app dependencies into embeddable runtime
+        run: |
+          # The shipped runtime must be self-contained: the installer copies runtime/ as-is
+          # and start.bat only bootstraps it when toga is missing.
+          & ".\runtime\python.exe" -m pip install --no-warn-script-location -r requirements.txt
+          if ($LASTEXITCODE -ne 0) { throw "pip install into runtime failed with exit code $LASTEXITCODE" }
+
+      - name: Verify embeddable runtime
+        run: |
+          & ".\runtime\python.exe" -c "import tkinter, toga, psutil; from toga.handlers import WeakrefCallable; print('runtime imports OK')"
+          if ($LASTEXITCODE -ne 0) { throw "embeddable runtime is missing required modules" }
 
       - name: Determine bump type
         id: bump
@@ -107,7 +132,7 @@ jobs:
           $headers = @{
             Accept = "application/vnd.github+json"
             "X-GitHub-Api-Version" = "2022-11-28"
-            Authorization = "******"
+            Authorization = "Bearer $env:GITHUB_TOKEN"
           }
           $releaseUrl = "https://api.github.com/repos/$env:GITHUB_REPOSITORY/releases/latest"
           try {

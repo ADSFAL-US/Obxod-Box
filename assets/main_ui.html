@@ -605,6 +605,13 @@
     margin: 4px 0 8px;
   }
 
+  .settings-value {
+    font-size: 13px;
+    color: #e8e8e8;
+    font-variant-numeric: tabular-nums;
+    user-select: text;
+  }
+
   .switch {
     position: relative; display: inline-block;
     width: 42px; height: 24px; flex-shrink: 0;
@@ -832,6 +839,15 @@
               <input type="checkbox" id="setAutoUpdate">
               <span></span>
             </label>
+          </div>
+        </div>
+
+        <div class="settings-section">
+          <div class="settings-section-title">О приложении</div>
+
+          <div class="settings-item">
+            <label>Версия</label>
+            <span class="settings-value" id="appVersion">__APP_VERSION__</span>
           </div>
         </div>
 

@@ -21,6 +21,7 @@ from config import VALID_MODES
 from network_watcher import NetworkEvent, NetworkState, NetworkWatcher
 from platform_info import get_platform, is_desktop, is_mobile, supports_system_tray
 from platform_tray import TrayCallbacks, create_tray
+from version import __version__ as APP_VERSION
 from xray_manager import XrayManager
 
 logger = logging.getLogger(__name__)
@@ -1010,7 +1011,11 @@ class MainWindow:
 
     def _render_html(self) -> str:
         initial_mode = json.dumps(self.config.mode)
-        return _load_ui_html().replace('"__INITIAL_MODE__"', initial_mode)
+        return (
+            _load_ui_html()
+            .replace('"__INITIAL_MODE__"', initial_mode)
+            .replace("__APP_VERSION__", APP_VERSION)
+        )
 
     # ------------------------------------------------------------------
     # WebView / сообщения

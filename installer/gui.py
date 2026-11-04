@@ -196,10 +196,12 @@ class InstallerGUI:
     
     def _installation_complete_ui(self, success: bool, error_msg: str = ""):
         """Handle installation completion in UI thread."""
-        self.install_btn.config(state=tk.NORMAL, text="Install")
-        self.cancel_btn.config(text="Close")
-        
+        self.cancel_btn.config(state=tk.NORMAL, text="Close")
+        self.path_entry.config(state=tk.NORMAL)
+
         if success:
+            # Установка завершена — повторять нечего, оставляем только «Закрыть».
+            self.install_btn.config(state=tk.DISABLED, text="Install")
             self.progress_var.set(100)
             self.status_var.set("Installation completed successfully!")
             messagebox.showinfo(
@@ -208,6 +210,8 @@ class InstallerGUI:
                 "You can now launch it from the desktop or Start Menu."
             )
         else:
+            # Ошибка — даём повторить попытку.
+            self.install_btn.config(state=tk.NORMAL, text="Retry")
             self.status_var.set("Installation failed")
             messagebox.showerror(
                 "Installation Failed",

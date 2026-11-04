@@ -14,14 +14,10 @@ def build_installer(version: str = "1.0.0", use_pure_python: bool = True):
     """Build the installer."""
     print(f"Building Obxod-BOX Installer v{version}")
     print("=" * 50)
-    
+
     script_dir = Path(__file__).parent
-    
-    if use_pure_python:
-        builder_script = script_dir / "build_sfx_pure.py"
-    else:
-        builder_script = script_dir / "build_sfx_7zip.py"
-    
+    builder_script = script_dir / "build_sfx_proper.py"
+
     if not builder_script.exists():
         print(f"Builder script not found: {builder_script}")
         return False

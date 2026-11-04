@@ -234,6 +234,7 @@ class MainWindow:
                 and 0 < len(v) <= 100
                 and "/" not in v and "\\" not in v and ".." not in v
             ),
+            "auto_update_enabled": lambda v: isinstance(v, bool),
         }
 
         window_size = (800, 600)
@@ -253,7 +254,7 @@ class MainWindow:
                     (screen.size.width - window_size[0]) // 2,
                     (screen.size.height - window_size[1]) // 2,
                 )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.debug("main window center skipped: %s", exc)
         try:
             self.window.hide()
@@ -1421,6 +1422,7 @@ class MainWindow:
             "ping_timeout":                    self.config.get("ping_timeout", 5),
             "ping_concurrency":                self.config.get("ping_concurrency", 8),
             "routing_set":                     self.config.get("routing_set"),
+            "auto_update_enabled":             bool(self.config.get("auto_update_enabled", True)),
         }
         if sys.platform == "win32":
             js = "window.setSettings(" + json.dumps(payload, ensure_ascii=True) + ");"

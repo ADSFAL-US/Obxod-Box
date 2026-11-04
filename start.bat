@@ -28,11 +28,12 @@ REM Проверяем, что критичные зависимости реа�
 if errorlevel 1 (
     echo.
     echo [WARN] Зависимости неполные. Пересобираю окружение...
+    REM Рантайм может быть занят работающим экземпляром приложения:
+    REM удаление тогда провалится, и ensure_runtime доустановит поверх.
     rmdir /s /q "%RUNTIME%" 2>nul
     call :ensure_runtime
     if errorlevel 1 exit /b 1
 )
-
 REM ════════════════════════════════════════════════════════════════
 REM  Запуск
 REM ════════════════════════════════════════════════════════════════
@@ -85,24 +86,49 @@ if errorlevel 1 (
 )
 
 echo [2/4] Распаковываю...
-powershell -NoProfile -Command "Expand-Archive -LiteralPath '%RUNTIME%\python.zip' -DestinationPath '%RUNTIME%' -Force"
-del /q "%RUNTIME%\python.zip"
+REM Распаковываем во временную папку и переносим файлы: Expand-Archive -Force
+REM падает, если целевые файлы заняты запущенным python.exe/pythonw.exe.
+set "PY_TMP=%RUNTIME%\_py_unpack"
+if exist "%PY_TMP%" rmdir /s /q "%PY_TMP%" 2>nul
+powershell -NoProfile -Command "Expand-Archive -LiteralPath '%RUNTIME%\python.zip' -DestinationPath '%PY_TMP%' -Force"
+if errorlevel 1 (
+    echo ОШИБКА: не удалось распаковать Python.
+    pause
+    exit /b 1
+)
+del /q "%RUNTIME%\python.zip" 2>nul
+xcopy /e /i /y /q "%PY_TMP%\*" "%RUNTIME%\" >nul
+rmdir /s /q "%PY_TMP%" 2>nul
 
+REM ._pth должен содержать Lib\site-packages и import site ровно по одному разу
 for %%f in ("%RUNTIME%\python*._pth") do (
-    echo Lib\site-packages>> "%%~ff"
-    echo import site>> "%%~ff"
+    findstr /x /c:"Lib\site-packages" "%%~ff" >nul 2>&1 || echo Lib\site-packages>> "%%~ff"
+    findstr /x /c:"import site" "%%~ff" >nul 2>&1 || echo import site>> "%%~ff"
 )
 if not exist "%RUNTIME%\Lib\site-packages" mkdir "%RUNTIME%\Lib\site-packages"
 
 echo [3/4] Устанавливаю pip...
-curl -L -o "%RUNTIME%\get-pip.py" "%GET_PIP_URL%"
-"%PY%" "%RUNTIME%\get-pip.py" --no-warn-script-location
+REM get-pip.py не подходит: он запускает "<tmp>/pip install ...", из-за чего
+REM sys.argv[0] == "pip" и pip 26.x отказывается себя обновлять
+REM ("To modify pip, please run the following command"). Ставим wheel напрямую.
+"%PY%" -m pip --version >nul 2>&1
 if errorlevel 1 (
-    echo ОШИБКА: pip не установился.
-    pause
-    exit /b 1
+    powershell -NoProfile -Command ^
+        "$ErrorActionPreference='Stop';" ^
+        "$j = Invoke-RestMethod 'https://pypi.org/pypi/pip/json';" ^
+        "$w = ($j.urls | Where-Object { $_.packagetype -eq 'bdist_wheel' } | Select-Object -First 1).url;" ^
+        "if (-not $w) { throw 'pip wheel not found on PyPI' };" ^
+        "Invoke-WebRequest -Uri $w -OutFile '%RUNTIME%\pip.zip';" ^
+        "Expand-Archive -LiteralPath '%RUNTIME%\pip.zip' -DestinationPath '%RUNTIME%\Lib\site-packages' -Force"
+    if errorlevel 1 (
+        echo ОШИБКА: pip не установился.
+        pause
+        exit /b 1
+    )
+    del /q "%RUNTIME%\pip.zip" 2>nul
+) else (
+    echo pip уже установлен, пропускаю.
 )
-del /q "%RUNTIME%\get-pip.py"
 
 echo [4/4] Ставлю зависимости...
 if not exist "%REQ%" (

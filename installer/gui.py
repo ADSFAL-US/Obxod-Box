@@ -1,35 +1,35 @@
 """
 GUI Installer for Obxod-BOX using tkinter.
 """
-import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
-import threading
 import sys
+import threading
+import tkinter as tk
 from pathlib import Path
+from tkinter import filedialog, messagebox, ttk
 from typing import Optional
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from installer.core import (
-    ObxodBoxInstaller, 
-    InstallConfig, 
-    InstallMode, 
-    InstallerError
-)
+from installer.core import InstallConfig, InstallerError, InstallMode, ObxodBoxInstaller
 
 
 class InstallerGUI:
     """GUI Installer for Obxod-BOX."""
     
-    def __init__(self, payload_path: Path):
+    def __init__(self, payload_path: Path, install_dir: Optional[str] = None,
+                 no_shortcuts: bool = False, restart: bool = False,
+                 runtime_source: Optional[str] = None):
         self.payload_path = Path(payload_path)
         self.installer: Optional[ObxodBoxInstaller] = None
         self.install_thread: Optional[threading.Thread] = None
         self.config: Optional[InstallConfig] = None
-        
+        self.no_shortcuts = no_shortcuts
+        self.restart = restart
+        self.runtime_source = Path(runtime_source) if runtime_source else None
+
         # Default install path
-        self.default_install_path = Path("C:/obxod-box")
+        self.default_install_path = Path(install_dir) if install_dir else Path("C:/obxod-box")
         
         self.root = tk.Tk()
         self.root.title("Obxod-BOX Setup")
@@ -42,9 +42,9 @@ class InstallerGUI:
         
         # Variables
         self.install_path_var = tk.StringVar(value=str(self.default_install_path))
-        self.create_desktop_shortcut_var = tk.BooleanVar(value=True)
-        self.create_start_menu_shortcut_var = tk.BooleanVar(value=True)
-        self.run_after_install_var = tk.BooleanVar(value=False)
+        self.create_desktop_shortcut_var = tk.BooleanVar(value=not no_shortcuts)
+        self.create_start_menu_shortcut_var = tk.BooleanVar(value=not no_shortcuts)
+        self.run_after_install_var = tk.BooleanVar(value=restart)
         
         self.setup_ui()
         
@@ -230,11 +230,12 @@ class InstallerGUI:
         # Create config
         self.config = InstallConfig(
             install_path=install_path,
-            create_shortcut=True,
+            create_shortcut=not self.no_shortcuts,
             create_desktop_shortcut=self.create_desktop_shortcut_var.get(),
             create_start_menu_shortcut=self.create_start_menu_shortcut_var.get(),
             run_after_install=self.run_after_install_var.get(),
-            mode=InstallMode.GUI
+            mode=InstallMode.GUI,
+            runtime_source=self.runtime_source,
         )
         
         # Create installer
@@ -266,7 +267,43 @@ class InstallerGUI:
         self.root.mainloop()
 
 
-def run_gui_installer(payload_path: Path):
-    """Entry point for GUI installer."""
-    app = InstallerGUI(payload_path)
+def run_gui_installer(payload_path: Path, silent: bool = False,
+                      install_dir: Optional[str] = None,
+                      no_shortcuts: bool = False,
+                      restart: bool = False,
+                      runtime_source: Optional[str] = None) -> int:
+    """Entry point for GUI installer.
+
+    When silent is True the installation runs headless with the given options
+    (used by the SFX AutoInstall path). Returns a process exit code.
+    """
+    if silent:
+        return run_silent_installer(
+            payload_path, install_dir, no_shortcuts, restart, runtime_source
+        )
+
+    app = InstallerGUI(payload_path, install_dir, no_shortcuts, restart, runtime_source)
     app.run()
+    return 0
+
+
+def run_silent_installer(payload_path: Path, install_dir: Optional[str] = None,
+                         no_shortcuts: bool = False, restart: bool = False,
+                         runtime_source: Optional[str] = None) -> int:
+    """Run installation without any UI. Returns process exit code."""
+    config = InstallConfig(
+        install_path=Path(install_dir) if install_dir else Path("C:/obxod-box"),
+        create_shortcut=not no_shortcuts,
+        create_desktop_shortcut=not no_shortcuts,
+        create_start_menu_shortcut=not no_shortcuts,
+        run_after_install=restart,
+        mode=InstallMode.GUI,
+        silent=True,
+        runtime_source=Path(runtime_source) if runtime_source else None,
+    )
+    installer = ObxodBoxInstaller(config)
+    try:
+        return 0 if installer.install(Path(payload_path)) else 1
+    except Exception as exc:  # noqa: BLE001 - report any failure as exit code
+        print(f"Installation failed: {exc}", file=sys.stderr)
+        return 1

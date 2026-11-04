@@ -21,6 +21,14 @@ from net_utils import (
     download_xray,
 )
 
+from auto_update import (
+    check_for_update,
+    download_installer,
+    get_downloads_folder,
+    run_installer_silent,
+)
+from version import __version__ as APP_VERSION
+
 # Безопасный импорт для Windows (Pylance не видит System.Drawing на других ОС)
 if sys.platform == "win32":
     try:
@@ -122,7 +130,7 @@ class LoadingWindow:
                 (screen.size.height - window_size[1]) // 2,
             )
             window.screen_position = pos
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.debug("center window skipped: %s", exc)
             try:
                 # фолбэк: абсолютная позиция (может проигнорироваться до show)
@@ -148,7 +156,7 @@ class LoadingWindow:
             dwm = ctypes.windll.dwmapi
             value = ctypes.c_int(1)
             dwm.DwmSetWindowAttribute(hwnd, 20, ctypes.byref(value), ctypes.sizeof(value))
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.warning("Не удалось применить тёмный заголовок: %s", exc)
 
     @staticmethod
@@ -157,7 +165,7 @@ class LoadingWindow:
             return
         try:
             native.BackColor = Color.FromArgb(*BG_COLOR)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.debug("BackColor не применился: %s", exc)
 
     def on_webview_loaded(self, widget, **kwargs):
@@ -199,7 +207,7 @@ class LoadingWindow:
             loop.call_soon_threadsafe(
                 lambda: asyncio.ensure_future(self._eval_js(js))
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.debug("schedule_js failed: %s", exc)
 
     async def _eval_js(self, js: str) -> None:
@@ -207,7 +215,7 @@ class LoadingWindow:
             # выражение с return — надёжнее на WebKitGTK, чем «голый» statement
             wrapped = "(function(){" + js + "; return true;})()"
             await self.webview.evaluate_javascript(wrapped)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.debug("JS eval failed: %s", exc)
 
     # ── Публичное API для прогресса/статуса ────────────────────────────
@@ -238,7 +246,7 @@ class LoadingWindow:
             await self._eval_js(
                 f"if(window.setProgress) window.setProgress({self._progress})"
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.debug("Не удалось обновить прогресс загрузки: %s", exc)
 
     async def _apply_status(self) -> None:
@@ -251,7 +259,7 @@ class LoadingWindow:
                 "if(window.setStatus) window.setStatus("
                 + json.dumps(self._status or "", ensure_ascii=False) + ")"
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.debug("Не удалось обновить статус загрузки: %s", exc)
 
     # ── Этапы загрузки ─────────────────────────────────────────────────
@@ -288,10 +296,16 @@ class LoadingWindow:
 
             try:
                 await asyncio.to_thread(worker)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.error("Этап '%s' упал: %s", text, exc, exc_info=True)
                 raise
             self.set_progress(end)
+
+        # ── Этап проверки обновлений (0–5%) ──────────────────────────
+        try:
+            await self._check_update_stage()
+        except Exception as exc:
+            logger.error("Этап проверки обновлений упал: %s", exc, exc_info=True)
 
         try:
             await run_stage(
@@ -310,7 +324,7 @@ class LoadingWindow:
                     "Скачиваю Wintun",
                     lambda cb: download_wintun(bin_dir, progress_cb=cb),
                 )
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 self.set_status(f"Не удалось скачать Wintun: {exc}")
         else:
             self.set_progress(55)
@@ -323,7 +337,7 @@ class LoadingWindow:
                     GEOIP_URL, geo_dir / "geoip.dat", "geoip.dat", cb,
                 ),
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             self.set_status(f"Не удалось скачать geoip.dat: {exc}")
 
         try:
@@ -334,11 +348,103 @@ class LoadingWindow:
                     GEOSITE_URL, geo_dir / "geosite.dat", "geosite.dat", cb,
                 ),
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             self.set_status(f"Не удалось скачать geosite.dat: {exc}")
 
         self.set_status("Подготовка завершена")
         self.set_progress(95)
+
+    async def _check_update_stage(self) -> None:
+        """Проверяет обновления и при необходимости запускает установщик."""
+        self._status = "Проверяю обновления..."
+        self._progress = 0
+        await self._apply_status()
+        await self._apply_progress()
+
+        auto_update_enabled = self.app.config.get("auto_update_enabled", True)
+        logger.info("Автообновления включены: %s", auto_update_enabled)
+
+        if not auto_update_enabled:
+            # Проверяем всё равно, чтобы показать уведомление о новой версии
+            update_info = check_for_update(APP_VERSION)
+            if update_info and not update_info.get("no_installer_for_platform"):
+                self.set_status(
+                    f"Доступна новая версия v{update_info['version']} "
+                    "(автообновления выключены)"
+                )
+                await self._apply_status()
+            elif update_info and update_info.get("no_installer_for_platform"):
+                self.set_status(
+                    f"Новая версия v{update_info['version']}, "
+                    "но нет установщика для вашей платформы"
+                )
+                await self._apply_status()
+            return
+
+        update_info = check_for_update(APP_VERSION)
+        if not update_info:
+            self.set_progress(5)
+            return
+
+        if update_info.get("no_installer_for_platform"):
+            self.set_status(
+                f"Новая версия v{update_info['version']}, "
+                "но нет установщика для вашей платформы"
+            )
+            await self._apply_status()
+            self.set_progress(5)
+            return
+
+        download_url = update_info.get("download_url")
+        if not download_url:
+            self.set_status("Не удалось получить URL установщика")
+            await self._apply_status()
+            self.set_progress(5)
+            return
+
+        # Скачиваем установщик
+        self.set_status(f"Скачиваю обновление v{update_info['version']}...")
+        await self._apply_status()
+
+        try:
+            installer_path = await asyncio.to_thread(
+                download_installer,
+                download_url,
+                get_downloads_folder(),
+            )
+        except Exception as exc:
+            logger.error("Не удалось скачать установщик: %s", exc)
+            self.set_status(f"Ошибка скачивания обновления: {exc}")
+            await self._apply_status()
+            self.set_progress(5)
+            return
+
+        # Запускаем установщик в тихом режиме и завершаем клиент
+        self.set_status("Запускаю установщик... клиент будет перезапущен")
+        await self._apply_status()
+
+        try:
+            app_dir = Path(__file__).resolve().parent
+            await asyncio.to_thread(
+                run_installer_silent,
+                installer_path,
+                app_dir,
+            )
+        except Exception as exc:
+            logger.error("Не удалось запустить установщик: %s", exc)
+            self.set_status(f"Ошибка запуска установщика: {exc}")
+            await self._apply_status()
+            self.set_progress(5)
+            return
+
+        # Клиент должен завершиться — установщик сам перезапустит его
+        logger.info("Установщик запущен, завершаю клиент")
+        self.set_status("Установщик запущен. Завершаю клиент...")
+        await self._apply_status()
+
+        # Даем установщику время запуститься перед выходом
+        await asyncio.sleep(1.0)
+        sys.exit(0)
 
     def load_svg_animation(self):
         svg_path = self.app.paths.app / "assets" / "startup-animation500x500.svg"

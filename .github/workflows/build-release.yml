@@ -54,11 +54,24 @@ jobs:
           Invoke-WebRequest -Uri $runtimeUrl -OutFile $runtimeZip
           Write-Host "Extracting runtime..."
           Expand-Archive -Path $runtimeZip -DestinationPath runtime -Force
-          Invoke-WebRequest -Uri "https://bootstrap.pypa.io/get-pip.py" -OutFile "runtime/get-pip.py"
-          cd runtime
-          .\python.exe get-pip.py
-          cd ..
           Remove-Item $runtimeZip
+
+          # Embeddable builds ignore PYTHONPATH; site-packages must be listed in the ._pth file.
+          $pth = Get-ChildItem -LiteralPath "runtime" -Filter "python*._pth" | Select-Object -First 1
+          if (-not $pth) { throw "python*._pth not found in runtime" }
+          $pthLines = Get-Content -LiteralPath $pth.FullName
+          if ($pthLines -notcontains "Lib\site-packages") {
+            Add-Content -LiteralPath $pth.FullName -Value "Lib\site-packages"
+          }
+          if ($pthLines -notcontains "import site") {
+            Add-Content -LiteralPath $pth.FullName -Value "import site"
+          }
+          New-Item -ItemType Directory -Force -Path "runtime\Lib\site-packages" | Out-Null
+
+          Invoke-WebRequest -Uri "https://bootstrap.pypa.io/get-pip.py" -OutFile "runtime/get-pip.py"
+          & ".\runtime\python.exe" "runtime/get-pip.py" --no-warn-script-location
+          if ($LASTEXITCODE -ne 0) { throw "get-pip.py failed with exit code $LASTEXITCODE" }
+          Remove-Item "runtime/get-pip.py"
           Write-Host "Runtime ready at $(Get-Location)/runtime"
 
       - name: Install Python dependencies
@@ -66,12 +79,60 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Install tkinter into embeddable runtime
+        run: |
+          $runtimeDir = "runtime"
+          Write-Host "Installing tkinter-embed into embeddable runtime using system Python..."
+          python -m pip install tkinter-embed --target "$runtimeDir"
+          Write-Host "tkinter installed into embeddable runtime"
+
+      - name: Install app dependencies into embeddable runtime
+        run: |
+          # The shipped runtime must be self-contained: the installer copies runtime/ as-is
+          # and start.bat only bootstraps it when toga is missing.
+          & ".\runtime\python.exe" -m pip install --no-warn-script-location -r requirements.txt
+          if ($LASTEXITCODE -ne 0) { throw "pip install into runtime failed with exit code $LASTEXITCODE" }
+
+      - name: Verify embeddable runtime
+        run: |
+          & ".\runtime\python.exe" -c "import tkinter, toga, psutil; from toga.handlers import WeakrefCallable; print('runtime imports OK')"
+          if ($LASTEXITCODE -ne 0) { throw "embeddable runtime is missing required modules" }
+
+      - name: Determine bump type
+        id: bump
+        run: |
+          if ("${{ github.event_name }}" -eq "workflow_dispatch") {
+            $bump = "${{ github.event.inputs.bump }}"
+            Write-Host "Using manual bump from input: $bump"
+          } else {
+            $parents = git log -1 --pretty=%P HEAD
+            $parentCount = ($parents -split '\s+').Where({ $_ }).Count
+            if ($parentCount -gt 1) {
+              $mergeCommits = [int](git rev-list --count ^HEAD^1 HEAD)
+              Write-Host "Merge commit detected with $mergeCommits commits in branch"
+              if ($mergeCommits -gt 20) {
+                  $bump = "z"
+                Write-Host "More than 20 commits -> MAJOR bump (x+1)"
+              } else {
+                $bump = "y"
+                Write-Host "20 or fewer commits -> MINOR bump (y+1)"
+              }
+            } else {
+                $bump = "x"
+              Write-Host "Direct commit -> PATCH bump (z+1)"
+            }
+          }
+          echo "bump=$bump" >> $env:GITHUB_OUTPUT
+
       - name: Get latest version from GitHub
         id: version
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $headers = @{
             Accept = "application/vnd.github+json"
             "X-GitHub-Api-Version" = "2022-11-28"
+            Authorization = "Bearer $env:GITHUB_TOKEN"
           }
           $releaseUrl = "https://api.github.com/repos/$env:GITHUB_REPOSITORY/releases/latest"
           try {
@@ -93,25 +154,14 @@ jobs:
           }
           echo "latest_version=$version" >> $env:GITHUB_OUTPUT
 
-      - name: Build Release
-        id: build
-        working-directory: ${{ github.workspace }}
+      - name: Compute and write version
+        id: write-version
         env:
           LATEST_VERSION: ${{ steps.version.outputs.latest_version }}
-          BUMP_TYPE: ${{ github.event.inputs.bump }}
-          NO_INSTALLER: ${{ github.event.inputs.no_installer }}
+          BUMP_TYPE: ${{ steps.bump.outputs.bump }}
         run: |
           $latestVersion = $env:LATEST_VERSION
-          $bump = if ($env:BUMP_TYPE) { $env:BUMP_TYPE } else { "x" }
-          $noInstaller = $env:NO_INSTALLER
-
-          Write-Host "Working directory: $(Get-Location)"
-          Write-Host "Building from v$latestVersion with bump '$bump'"
-          if ($noInstaller -eq 'true') {
-            & "${{ github.workspace }}\mkbuild.ps1" -BaseVersion $latestVersion -Bump $bump -NoInstaller
-          } else {
-            & "${{ github.workspace }}\mkbuild.ps1" -BaseVersion $latestVersion -Bump $bump
-          }
+          $bump = $env:BUMP_TYPE
 
           $p = $latestVersion.Split('.')
           $z = [int]$p[0]; $y = [int]$p[1]; $x = [int]$p[2]
@@ -121,12 +171,40 @@ jobs:
             'x' { $x++ }
           }
           $newVersion = "$z.$y.$x"
+          Write-Host "Computed new version: v$newVersion (bump: $bump)"
+
+          $content = """Версия приложения Obxod-BOX.""" + "`n`n__version__ = `"$newVersion`"" + "`n"
+          Set-Content -Path "version.py" -Value $content -Encoding utf8
+          Write-Host "Written __version__ = $newVersion to version.py"
+
           echo "new_version=$newVersion" >> $env:GITHUB_OUTPUT
+
+      - name: Build Release
+        id: build
+        working-directory: ${{ github.workspace }}
+        env:
+          LATEST_VERSION: ${{ steps.version.outputs.latest_version }}
+          BUMP_TYPE: ${{ steps.bump.outputs.bump }}
+          NEW_VERSION: ${{ steps.write-version.outputs.new_version }}
+          NO_INSTALLER: ${{ github.event.inputs.no_installer }}
+        run: |
+          $latestVersion = $env:LATEST_VERSION
+          $bump = $env:BUMP_TYPE
+          $newVersion = $env:NEW_VERSION
+          $noInstaller = $env:NO_INSTALLER
+
+          Write-Host "Working directory: $(Get-Location)"
+          Write-Host "Building from v$latestVersion -> v$newVersion with bump '$bump'"
+          if ($noInstaller -eq 'true') {
+            & "${{ github.workspace }}\mkbuild.ps1" -BaseVersion $latestVersion -Bump $bump -NoInstaller
+          } else {
+            & "${{ github.workspace }}\mkbuild.ps1" -BaseVersion $latestVersion -Bump $bump
+          }
 
       - name: Find built artifacts
         id: artifacts
         run: |
-          $version = "${{ steps.build.outputs.new_version }}"
+          $version = "${{ steps.write-version.outputs.new_version }}"
           $bundleDir = ".\build-bundle"
 
           $installer = Get-ChildItem -LiteralPath $bundleDir -Filter "Obxod-BOX-Setup-v$version.exe" | Select-Object -First 1

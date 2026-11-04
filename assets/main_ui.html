@@ -823,6 +823,18 @@
           </div>
         </div>
 
+        <div class="settings-section">
+          <div class="settings-section-title">Автообновления</div>
+
+          <div class="settings-item">
+            <label for="setAutoUpdate">Включить авто обновления</label>
+            <label class="switch">
+              <input type="checkbox" id="setAutoUpdate">
+              <span></span>
+            </label>
+          </div>
+        </div>
+
       </div>
     </div>
   </div>
@@ -1204,6 +1216,7 @@
         ['setNetInterval',    'network_watch_interval',         'int'],
         ['setAutoReconnect',  'network_auto_reconnect',         'checked'],
         ['setRestartIface',   'network_restart_on_iface_change','checked'],
+        ['setAutoUpdate',     'auto_update_enabled',            'checked'],
         ['setPingUrl',        'ping_url',                       'url'],
         ['setPingTimeout',    'ping_timeout',                   'int'],
         ['setPingConcurrency','ping_concurrency',               'int'],
@@ -1288,6 +1301,7 @@
       apply('setNetInterval',   cfg.network_watch_interval ?? 2,              'value');
       apply('setAutoReconnect', cfg.network_auto_reconnect !== false,         'checked');
       apply('setRestartIface',  cfg.network_restart_on_iface_change !== false,'checked');
+      apply('setAutoUpdate',    cfg.auto_update_enabled !== false,            'checked');
       apply('setPingUrl',       cfg.ping_url || '',                           'value');
       apply('setPingTimeout',   cfg.ping_timeout ?? 5,                        'value');
       apply('setPingConcurrency', cfg.ping_concurrency ?? 8,                  'value');

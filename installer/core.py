@@ -38,6 +38,7 @@ class InstallConfig:
     run_after_install: bool = False
     mode: InstallMode = InstallMode.GUI
     silent: bool = False
+    runtime_source: Optional[Path] = None
 
 
 class InstallerError(Exception):
@@ -147,6 +148,15 @@ class ObxodBoxInstaller:
                 shutil.copytree(item, dest)
             else:
                 shutil.copy2(item, dest)
+
+        # The payload only carries application sources; the Python runtime ships
+        # alongside the installer and must be copied into the installation too.
+        if self.config.runtime_source and self.config.runtime_source.is_dir():
+            runtime_dest = self.install_path / "runtime"
+            if runtime_dest.exists():
+                shutil.rmtree(runtime_dest)
+            shutil.copytree(self.config.runtime_source, runtime_dest)
+            logger.info(f"Runtime copied from {self.config.runtime_source}")
         
         self._report_progress(60, "Files installed")
     

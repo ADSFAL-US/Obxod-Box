@@ -15,6 +15,12 @@ set "RESTART=0"
 set "KEEP_FILES=0"
 set "INSTALL_DIR="
 
+rem  ROOT — папка, куда SFX распаковал installer/, runtime/, payload.zip.
+rem  Запоминаем ДО разбора аргументов: shift сдвигает и %0, после чего %~dp0
+rem  указывает уже на аргумент, а не на папку скрипта.
+set "ROOT=%~dp0"
+if "%ROOT:~-1%"=="\" set "ROOT=%ROOT:~0,-1%"
+
 :parse_args
 if "%~1"=="" goto :args_done
 if /i "%~1"=="--silent" set "SILENT=1" & shift & goto :parse_args
@@ -27,10 +33,6 @@ goto :parse_args
 :args_done
 
 rem ── Пути ─────────────────────────────────────────────────────────
-rem  ROOT — папка, куда SFX распаковал installer/, runtime/, payload.zip
-set "ROOT=%~dp0"
-if "%ROOT:~-1%"=="\" set "ROOT=%ROOT:~0,-1%"
-
 if not defined INSTALL_DIR set "INSTALL_DIR=C:\obxod-box"
 if "%INSTALL_DIR:~-1%"=="\" set "INSTALL_DIR=%INSTALL_DIR:~0,-1%"
 

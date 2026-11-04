@@ -5,6 +5,7 @@ import logging
 import os
 import re
 import sys
+import threading
 from pathlib import Path
 
 import toga
@@ -437,14 +438,35 @@ class LoadingWindow:
             self.set_progress(5)
             return
 
-        # Клиент должен завершиться — установщик сам перезапустит его
+        # Клиент должен завершиться — установщик сам перезапустит его.
+        # sys.exit() внутри задачи asyncio только роняет саму задачу,
+        # приложение продолжает жить и держит файлы установки.
         logger.info("Установщик запущен, завершаю клиент")
         self.set_status("Установщик запущен. Завершаю клиент...")
         await self._apply_status()
 
         # Даем установщику время запуститься перед выходом
         await asyncio.sleep(1.0)
-        sys.exit(0)
+        self._quit_app()
+
+    def _quit_app(self) -> None:
+        """Останавливает Xray и закрывает приложение по-настоящему."""
+        wrapper = getattr(self.app, "_main_window_wrapper", None)
+        if wrapper is not None:
+            try:
+                wrapper.prepare_for_exit()
+            except Exception as exc:
+                logger.debug("prepare_for_exit: %s", exc)
+
+        # Страховка: если цикл событий не закроется сам, установщик всё равно
+        # должен получить свободные файлы.
+        threading.Timer(5.0, lambda: os._exit(0)).start()
+
+        try:
+            self.app.exit()
+        except Exception as exc:
+            logger.warning("app.exit() не сработал: %s", exc)
+            os._exit(0)
 
     def load_svg_animation(self):
         svg_path = self.app.paths.app / "assets" / "startup-animation500x500.svg"

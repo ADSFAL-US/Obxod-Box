@@ -53,6 +53,11 @@ class ObxodBoxInstaller:
     APP_ID = "org.obxod.box"
     EXECUTABLE_NAME = "main.py"  # Python entry point
     UNINSTALLER_NAME = "uninstall.bat"
+
+    # Каталоги, которые не бэкапим: runtime — десятки тысяч мелких файлов,
+    # bin/geo скачиваются заново, logs — мусор. Бэкап нужен только чтобы
+    # откатить исходники при неудачном обновлении.
+    BACKUP_SKIP = ("runtime", "bin", "geo", "logs", "__pycache__")
     
     def __init__(self, config: InstallConfig, progress_callback: Optional[Callable[[int, str], None]] = None):
         self.config = config
@@ -108,34 +113,91 @@ class ObxodBoxInstaller:
         return exe_path.exists()
     
     def backup_existing_installation(self) -> Optional[Path]:
-        """Backup existing installation before update."""
-        if not self.check_existing_installation():
+        """Backup existing installation before update.
+
+        Копируем только исходники: runtime/ (десятки тысяч файлов) и
+        скачиваемые bin/geo/logs в бэкап не попадают — иначе обновление
+        висит минутами на копировании.
+        """
+        if not self.install_path.exists():
             return None
-            
+
         self._report_progress(35, "Backing up existing installation...")
         backup_dir = self.install_path.parent / f"{self.install_path.name}.backup"
-        
-        # Remove old backup if exists
+
         if backup_dir.exists():
-            shutil.rmtree(backup_dir)
-        
-        # Copy current installation to backup
-        shutil.copytree(self.install_path, backup_dir)
+            shutil.rmtree(backup_dir, ignore_errors=True)
+
+        def skip_heavy(_dir, names):
+            return [n for n in names if n in self.BACKUP_SKIP]
+
+        shutil.copytree(self.install_path, backup_dir, ignore=skip_heavy)
         logger.info(f"Backed up to: {backup_dir}")
         return backup_dir
-    
+
     def restore_backup(self, backup_dir: Path):
         """Restore from backup on failure."""
         self._report_progress(90, "Restoring backup...")
-        if self.install_path.exists():
-            shutil.rmtree(self.install_path)
-        shutil.copytree(backup_dir, self.install_path)
+        if not backup_dir.exists():
+            return
+
+        def skip_heavy(_dir, names):
+            return [n for n in names if n in self.BACKUP_SKIP]
+
+        # Не удаляем install_path целиком: в бэкапе нет runtime/, и после
+        # отката приложение осталось бы без интерпретатора.
+        shutil.copytree(backup_dir, self.install_path, dirs_exist_ok=True, ignore=skip_heavy)
         logger.info("Backup restored")
     
+    def _stop_running_app(self, timeout: float = 15.0) -> None:
+        """Завершает процессы, запущенные из папки установки.
+
+        Без этого обновление падает с Access denied: pythonw.exe держит
+        python311.dll, а xray.exe — wintun.dll.
+        """
+        try:
+            import psutil
+        except ImportError:
+            logger.warning("psutil недоступен, не могу остановить клиент")
+            return
+
+        root = str(self.install_path).lower().rstrip("\\") + "\\"
+        victims = []
+        for proc in psutil.process_iter(["pid", "exe"]):
+            try:
+                exe = (proc.info.get("exe") or "").lower()
+            except (psutil.Error, OSError):
+                continue
+            if exe.startswith(root):
+                victims.append(proc)
+        if not victims:
+            return
+
+        logger.info("Останавливаю запущенный клиент: %s",
+                    ", ".join(f"{p.pid}" for p in victims))
+        for proc in victims:
+            try:
+                proc.terminate()
+            except (psutil.Error, OSError):
+                pass
+
+        _, alive = psutil.wait_procs(victims, timeout=timeout)
+        for proc in alive:
+            try:
+                proc.kill()
+            except (psutil.Error, OSError):
+                pass
+        if alive:
+            psutil.wait_procs(alive, timeout=5.0)
+
     def install_files(self):
         """Copy extracted files to installation directory."""
         self._report_progress(40, "Installing files...")
-        
+
+        # Клиент мог остаться запущенным (автообновление) — иначе копирование
+        # упадёт на занятых DLL.
+        self._stop_running_app()
+
         # Create install directory
         self.install_path.mkdir(parents=True, exist_ok=True)
         
@@ -144,8 +206,8 @@ class ObxodBoxInstaller:
             dest = self.install_path / item.name
             if item.is_dir():
                 if dest.exists():
-                    shutil.rmtree(dest)
-                shutil.copytree(item, dest)
+                    shutil.rmtree(dest, ignore_errors=True)
+                shutil.copytree(item, dest, dirs_exist_ok=True)
             else:
                 shutil.copy2(item, dest)
 
@@ -154,8 +216,12 @@ class ObxodBoxInstaller:
         if self.config.runtime_source and self.config.runtime_source.is_dir():
             runtime_dest = self.install_path / "runtime"
             if runtime_dest.exists():
-                shutil.rmtree(runtime_dest)
-            shutil.copytree(self.config.runtime_source, runtime_dest)
+                shutil.rmtree(runtime_dest, ignore_errors=True)
+            # Если удалить не удалось (файлы всё ещё заняты) — копируем поверх,
+            # иначе установка падала бы на Access denied.
+            shutil.copytree(
+                self.config.runtime_source, runtime_dest, dirs_exist_ok=True
+            )
             logger.info(f"Runtime copied from {self.config.runtime_source}")
         
         self._report_progress(60, "Files installed")

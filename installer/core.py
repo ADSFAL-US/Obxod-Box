@@ -58,6 +58,12 @@ class ObxodBoxInstaller:
     # bin/geo скачиваются заново, logs — мусор. Бэкап нужен только чтобы
     # откатить исходники при неудачном обновлении.
     BACKUP_SKIP = ("runtime", "bin", "geo", "logs", "__pycache__")
+
+    # Пользовательские данные, которые нельзя удалять при откате, даже если
+    # в бэкапе их не было.
+    ROLLBACK_KEEP = BACKUP_SKIP + ("cfg",)
+
+    CONFIG_RELATIVE_PATH = Path("cfg") / "app-config.json"
     
     def __init__(self, config: InstallConfig, progress_callback: Optional[Callable[[int, str], None]] = None):
         self.config = config
@@ -65,6 +71,7 @@ class ObxodBoxInstaller:
         self.install_path = config.install_path.resolve()
         self.temp_dir: Optional[Path] = None
         self.payload_path: Optional[Path] = None
+        self.last_error: str = ""
         
     def _report_progress(self, percent: int, message: str):
         """Report progress to callback if available."""
@@ -135,19 +142,162 @@ class ObxodBoxInstaller:
         logger.info(f"Backed up to: {backup_dir}")
         return backup_dir
 
-    def restore_backup(self, backup_dir: Path):
-        """Restore from backup on failure."""
+    def restore_backup(self, backup_dir: Path) -> bool:
+        """Restore from backup on failure.
+
+        Копируем по файлам, а не одним copytree: часть файлов может быть
+        занята (DLL работающего клиента), и тогда нужно восстановить всё
+        остальное, а не падать на первом же отказе.
+
+        Возвращает True, если удалось восстановить все файлы.
+        """
         self._report_progress(90, "Restoring backup...")
         if not backup_dir.exists():
+            logger.error("Backup directory is missing: %s", backup_dir)
+            return False
+
+        try:
+            # Сначала убираем то, чего до обновления не было: иначе новые
+            # модули из неудачного пакета остались бы рядом со старыми и
+            # клиент снова падал бы при импорте.
+            self._remove_new_payload_entries(backup_dir)
+
+            # Не удаляем install_path целиком: в бэкапе нет runtime/, и после
+            # отката приложение осталось бы без интерпретатора.
+            failed = self._copy_tree_tolerant(backup_dir, self.install_path)
+        except OSError as exc:
+            logger.exception("Failed to restore backup: %s", exc)
+            return False
+
+        if failed:
+            logger.error("Rollback restored most files, %d could not be copied: %s",
+                         len(failed), ", ".join(failed[:5]))
+            return False
+        logger.info("Backup restored")
+        return True
+
+    def _copy_tree_tolerant(self, src: Path, dst: Path) -> list:
+        """Копирует дерево, пропуская файлы, которые не удалось записать."""
+        failed = []
+        for root, dirs, files in os.walk(src):
+            dirs[:] = [d for d in dirs if d not in self.BACKUP_SKIP]
+            rel = Path(root).relative_to(src)
+            target_dir = dst / rel
+            try:
+                target_dir.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                logger.warning("Cannot create %s: %s", target_dir, exc)
+                failed.append(str(target_dir))
+                continue
+            for name in files:
+                source = Path(root) / name
+                target = target_dir / name
+                try:
+                    shutil.copy2(source, target)
+                except OSError as exc:
+                    logger.warning("Cannot restore %s: %s", target, exc)
+                    failed.append(str(target))
+        return failed
+
+    def _remove_new_payload_entries(self, backup_dir: Path) -> None:
+        """Удаляет из install_path элементы, которых нет в бэкапе."""
+        if not self.temp_dir or not self.temp_dir.exists():
+            return
+        try:
+            entries = list(self.temp_dir.iterdir())
+        except OSError as exc:
+            logger.warning("Cannot list payload for rollback cleanup: %s", exc)
             return
 
-        def skip_heavy(_dir, names):
-            return [n for n in names if n in self.BACKUP_SKIP]
+        for entry in entries:
+            if entry.name in self.ROLLBACK_KEEP:
+                continue
+            backup_entry = backup_dir / entry.name
+            target = self.install_path / entry.name
+            if not backup_entry.exists():
+                self._remove_path(target, "added by failed update")
+                continue
+            if entry.is_dir() and backup_entry.is_dir():
+                self._remove_extra_children(entry, backup_entry, target)
 
-        # Не удаляем install_path целиком: в бэкапе нет runtime/, и после
-        # отката приложение осталось бы без интерпретатора.
-        shutil.copytree(backup_dir, self.install_path, dirs_exist_ok=True, ignore=skip_heavy)
-        logger.info("Backup restored")
+    def _remove_extra_children(self, src_dir: Path, backup_dir: Path, target_dir: Path) -> None:
+        """Удаляет из target_dir файлы, которых не было в бэкапе."""
+        if not target_dir.is_dir():
+            return
+        try:
+            entries = list(src_dir.iterdir())
+        except OSError:
+            return
+        for entry in entries:
+            if entry.name in self.ROLLBACK_KEEP:
+                continue
+            backup_entry = backup_dir / entry.name
+            target = target_dir / entry.name
+            if not backup_entry.exists():
+                self._remove_path(target, "added by failed update")
+                continue
+            if entry.is_dir():
+                self._remove_extra_children(entry, backup_entry, target)
+
+    def _clean_partial_install(self) -> None:
+        """Удаляет файлы недописанной первой установки.
+
+        Накатывать нечего (бэкапа нет), но оставлять полуустановку нельзя:
+        повторная попытка смешала бы старые и новые модули.
+        """
+        if not self.temp_dir or not self.temp_dir.exists():
+            return
+        self._report_progress(92, "Cleaning partial installation...")
+        try:
+            entries = list(self.temp_dir.iterdir())
+        except OSError as exc:
+            logger.warning("Cannot list payload for cleanup: %s", exc)
+            return
+        for entry in entries:
+            if entry.name in self.ROLLBACK_KEEP:
+                continue
+            self._remove_path(self.install_path / entry.name, "from failed fresh install")
+
+    def _remove_path(self, target: Path, reason: str) -> None:
+        if not target.exists():
+            return
+        try:
+            if target.is_dir():
+                shutil.rmtree(target)
+            else:
+                target.unlink()
+            logger.info("Removed %s: %s", reason, target)
+        except OSError as exc:
+            logger.warning("Cannot remove %s: %s", target, exc)
+
+    def disable_auto_update(self) -> bool:
+        """Выключает автообновление в конфиге установленного клиента.
+
+        Нужно после отката: иначе клиент при следующем запуске снова скачает
+        тот же установщик и упадёт на нём же.
+        """
+        config_path = self.install_path / self.CONFIG_RELATIVE_PATH
+        try:
+            data: Dict[str, Any] = {}
+            if config_path.exists():
+                try:
+                    loaded = json.loads(config_path.read_text(encoding="utf-8"))
+                    if isinstance(loaded, dict):
+                        data = loaded
+                except (json.JSONDecodeError, OSError) as exc:
+                    logger.warning("Cannot read client config %s: %s", config_path, exc)
+
+            data["auto_update_enabled"] = False
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+            config_path.write_text(
+                json.dumps(data, indent=2, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+            logger.info("Auto-update disabled in %s", config_path)
+            return True
+        except OSError as exc:
+            logger.error("Failed to disable auto-update: %s", exc)
+            return False
     
     def _stop_running_app(self, timeout: float = 15.0) -> None:
         """Завершает процессы, запущенные из папки установки.
@@ -418,21 +568,25 @@ $shortcut.Save()
         self._report_progress(95, "Installation verified")
         return True
     
+    def _launch_app(self) -> None:
+        """Запускает клиент после установки/отката."""
+        start_bat = self.install_path / "start.bat"
+        if not start_bat.exists():
+            logger.warning(f"start.bat not found at {start_bat}, cannot launch application")
+            return
+        try:
+            subprocess.Popen([str(start_bat)], cwd=str(self.install_path))
+            logger.info("Application launched")
+        except Exception as e:
+            logger.warning(f"Failed to launch application: {e}")
+
     def run_post_install(self):
         """Run post-installation tasks."""
         self._report_progress(98, "Finalizing...")
-        
+
         if self.config.run_after_install:
-            start_bat = self.install_path / "start.bat"
-            if start_bat.exists():
-                try:
-                    subprocess.Popen([str(start_bat)], cwd=str(self.install_path))
-                    logger.info("Application launched")
-                except Exception as e:
-                    logger.warning(f"Failed to launch application: {e}")
-            else:
-                logger.warning(f"start.bat not found at {start_bat}, cannot launch application")
-        
+            self._launch_app()
+
         self._report_progress(100, "Installation complete!")
     
     def cleanup(self):
@@ -444,24 +598,43 @@ $shortcut.Save()
             except Exception as e:
                 logger.warning(f"Failed to clean up temp directory: {e}")
     
+    def _rollback(self, backup_dir: Path) -> bool:
+        """Откатывает обновление и глушит автообновление клиента."""
+        restored = self.restore_backup(backup_dir)
+        if restored:
+            self._report_progress(95, "Previous version restored")
+        else:
+            self._report_progress(95, "Rollback finished with errors")
+
+        # Откат не должен оставить клиент в режиме, когда он снова тянет
+        # сломанное обновление: конфиг выключаем независимо от результата.
+        if not self.disable_auto_update():
+            self._report_progress(96, "Failed to disable auto-update")
+        return restored
+
     def install(self, payload_path: Path) -> bool:
         """Main installation routine."""
         backup_dir = None
+        self.last_error = ""
+        install_touched = False
         try:
             self._report_progress(5, "Starting installation...")
-            
+
             # Extract payload
             self.extract_payload(payload_path)
-            
+
             # Check for existing installation
             is_update = self.check_existing_installation()
             if is_update:
                 self._report_progress(20, "Existing installation found - updating...")
                 backup_dir = self.backup_existing_installation()
+                if backup_dir is None:
+                    raise InstallerError("Failed to create backup, update aborted")
             else:
                 self._report_progress(20, "Fresh installation...")
-            
+
             # Install files
+            install_touched = True
             self.install_files()
             
             # Create shortcuts
@@ -476,14 +649,39 @@ $shortcut.Save()
             
             # Post-install
             self.run_post_install()
+
+            if backup_dir is not None:
+                shutil.rmtree(backup_dir, ignore_errors=True)
             
             logger.info(f"Installation {'updated' if is_update else 'completed'} successfully!")
             return True
             
         except Exception as e:
-            logger.error(f"Installation failed: {e}")
+            self.last_error = str(e)
+            logger.error(f"Installation failed: {e}", exc_info=True)
+            if not install_touched:
+                # Файлы не тронуты — откатывать нечего и гасить автообновление
+                # не нужно, установка упала до изменений.
+                return False
             if backup_dir and backup_dir.exists():
-                self.restore_backup(backup_dir)
+                if not self._rollback(backup_dir):
+                    self.last_error += (
+                        f"\nRollback incomplete, backup kept at: {backup_dir}"
+                    )
+                # Клиент был остановлен перед копированием файлов — после
+                # отката его нужно поднять обратно, иначе пользователь
+                # останется без приложения после неудачного автообновления.
+                if self.config.run_after_install:
+                    self._launch_app()
+            elif (self.install_path / self.CONFIG_RELATIVE_PATH).exists():
+                # Свежая установка без бэкапа: клиента раньше не было, но
+                # конфиг остался — гасим автообновление, чтобы он не тянул
+                # сломанный пакет бесконечно.
+                self.disable_auto_update()
+            else:
+                # Первая установка упала: убираем недописанные файлы, чтобы
+                # повторная попытка не смешивала их с новыми.
+                self._clean_partial_install()
             return False
         finally:
             self.cleanup()

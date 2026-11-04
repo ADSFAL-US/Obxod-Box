@@ -312,6 +312,8 @@ def main():
             return 0
         else:
             print("[FAIL] Installation failed!")
+            if installer.last_error:
+                print(f"Reason: {installer.last_error}")
             return 1
 
     except InstallerError as e:

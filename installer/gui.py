@@ -254,7 +254,8 @@ class InstallerGUI:
         try:
             # Используем путь, который передан из install.bat
             success = self.installer.install(self.payload_path)
-            self.installation_complete(success)
+            error_msg = "" if success else (self.installer.last_error or "")
+            self.installation_complete(success, error_msg)
         except Exception as e:
             self.installation_complete(False, str(e))
     
@@ -307,7 +308,13 @@ def run_silent_installer(payload_path: Path, install_dir: Optional[str] = None,
     )
     installer = ObxodBoxInstaller(config)
     try:
-        return 0 if installer.install(Path(payload_path)) else 1
+        if installer.install(Path(payload_path)):
+            return 0
+        print(
+            f"Installation failed: {installer.last_error}",
+            file=sys.stderr,
+        )
+        return 1
     except Exception as exc:  # noqa: BLE001 - report any failure as exit code
         print(f"Installation failed: {exc}", file=sys.stderr)
         return 1

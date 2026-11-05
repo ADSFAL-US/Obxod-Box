@@ -197,6 +197,7 @@ class MainWindow:
 
         self._is_resizing: bool = False
         self._resize_timer: threading.Timer | None = None
+        self._js_failures: int = 0
         self._saved_normal_size: tuple[int, int] = (800, 600)
         self._was_minimized: bool = False
 
@@ -304,8 +305,8 @@ class MainWindow:
                     icon_path = p
                     break
         callbacks = TrayCallbacks(
-            on_open=lambda: self._ui(self._restore_from_tray),
-            on_exit=lambda: self._ui(self._exit_from_tray),
+            on_open=lambda: self._ui_deferred(self._restore_from_tray),
+            on_exit=lambda: self._ui_deferred(self._exit_from_tray),
         )
         backend = create_tray(
             callbacks,
@@ -355,6 +356,27 @@ class MainWindow:
                 fn()
             except Exception as e2:
                 logger.warning("UI callback failed: %s", e2)
+
+    def _ui_deferred(self, fn) -> None:
+        """Всегда ставит fn в очередь UI-потока, даже если мы уже на нём.
+
+        Обработчики WinForms-меню (ContextMenu/MenuItem.Click) крутят
+        вложенный модальный цикл. Синхронный Show/Hide/SetBounds внутри него
+        ломает message pump — окно перестаёт отвечать. Поэтому «Открыть» и
+        «Выход» из трея выполняются только после выхода из обработчика.
+        """
+        try:
+            native = self.window._impl.native
+            if (
+                _SysAction is not None
+                and hasattr(native, "IsHandleCreated")
+                and native.IsHandleCreated
+            ):
+                native.BeginInvoke(_SysAction(fn))
+                return
+        except Exception as e:
+            logger.debug("deferred UI marshal failed: %s", e)
+        self._ui(fn)
 
     def _on_tray_mouse_up(self, sender, event) -> None:
         try:
@@ -408,6 +430,12 @@ class MainWindow:
         """Вызвать перед реальным выходом (dispose tray, stop xray)."""
         self._user_requested_exit = True
         self._dispose_tray()
+        server = getattr(self.app, "_instance_server", None)
+        if server is not None:
+            try:
+                server.stop()
+            except Exception as e:
+                logger.debug("instance server stop: %s", e)
         # stop() ходит в сокет supervisor'а до 4с — не держим UI.
         # Супервизор сам убьёт xray, если не успеем.
         try:
@@ -576,12 +604,14 @@ class MainWindow:
             logger.warning("hide to tray failed: %s", e)
 
     def _force_foreground(self, native) -> None:
+        """Поднять окно на передний план.
+
+        Без TopMost-качелей и без AttachThreadInput: сцепка input-очередей
+        без гарантированного detach оставляет окно без ввода до перезапуска.
+        """
         try:
-            native.TopMost = True
             native.Activate()
             native.BringToFront()
-            native.Focus()
-            native.TopMost = False
         except Exception:
             pass
 
@@ -599,29 +629,15 @@ class MainWindow:
 
         try:
             user32 = ctypes.windll.user32
-            kernel32 = ctypes.windll.kernel32
 
             SW_SHOW = 5
             SW_RESTORE = 9
             user32.ShowWindow(hwnd, SW_SHOW)
             user32.ShowWindow(hwnd, SW_RESTORE)
 
-            fg = user32.GetForegroundWindow()
-            fg_tid = user32.GetWindowThreadProcessId(fg, None)
-            cur_tid = kernel32.GetCurrentThreadId()
-            attached = False
-            if fg_tid and fg_tid != cur_tid:
-                attached = bool(user32.AttachThreadInput(cur_tid, fg_tid, True))
-
             user32.BringWindowToTop(hwnd)
-            user32.SetWindowPos(hwnd, -1, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0040)
-            user32.SetWindowPos(hwnd, -2, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0040)
             user32.SetForegroundWindow(hwnd)
             user32.SetActiveWindow(hwnd)
-            user32.SetFocus(hwnd)
-
-            if attached:
-                user32.AttachThreadInput(cur_tid, fg_tid, False)
         except Exception as e:
             logger.debug("force foreground win32 failed: %s", e)
 
@@ -1039,6 +1055,8 @@ class MainWindow:
         except RuntimeError:
             self._main_loop = None
 
+        # Новая страница — мост снова рабочий
+        self._js_bridge_reset()
         self._install_web_message_handler()
 
         if not self._ready_notified:
@@ -1186,7 +1204,7 @@ class MainWindow:
                     await asyncio.sleep(0.12)
                     continue
 
-                raw = await self.webview.evaluate_javascript(js)
+                raw = await self._eval_js(js)
                 items: list = []
                 if raw is None or raw == "" or raw == "null":
                     await asyncio.sleep(0.12)
@@ -1223,12 +1241,23 @@ class MainWindow:
             await asyncio.sleep(0.12)
 
     def _handle_reload(self) -> None:
-        try:
-            logger.info("Перезагрузка UI (F5)")
-            self._ready_notified = False
-            self.webview.set_content("about:blank", self._render_html())
-        except Exception as e:
-            logger.warning("reload failed: %s", e)
+        """Перезагрузка UI.
+
+        NavigateToString нельзя вызывать изнутри WebMessageReceived —
+        реентерабельный вызов в WebView2 вешает рендерер. Откладываем на
+        следующий тик UI-потока.
+        """
+        logger.info("Перезагрузка UI (F5)")
+
+        def _do_reload() -> None:
+            try:
+                self._ready_notified = False
+                self._js_bridge_reset()
+                self.webview.set_content("about:blank", self._render_html())
+            except Exception as e:
+                logger.warning("reload failed: %s", e)
+
+        self._ui_deferred(_do_reload)
 
     async def _repush_state(self) -> None:
         try:
@@ -1257,7 +1286,8 @@ class MainWindow:
             return
         old_mode = self.config.mode
         self.config.mode = mode
-        self.config.save()
+        # save() — файловый I/O; на UI-потоке он лишний
+        asyncio.create_task(asyncio.to_thread(self.config.save))
         logger.info("Режим из интерфейса сохранён: %s (было %s)", mode, old_mode)
 
         if old_mode != mode:
@@ -1293,15 +1323,54 @@ class MainWindow:
     # ------------------------------------------------------------------
     # JS-мост
     # ------------------------------------------------------------------
+    # evaluate_javascript не имеет таймаута: если WebView2 не отвечает
+    # (залипает после Hide/Show или при потере фокуса), await висит вечно и
+    # держит _toggle_lock/_import_lock/_ping_lock. Поэтому — жёсткий таймаут
+    # и предохранитель: после серии таймаутов перестаём дёргать WebView до
+    # следующей загрузки страницы.
+    _JS_TIMEOUT = 2.0
+    _JS_MAX_FAILURES = 3
+
+    def _js_bridge_ok(self) -> bool:
+        return self._js_failures < self._JS_MAX_FAILURES
+
+    def _js_bridge_failed(self, reason: str) -> None:
+        self._js_failures += 1
+        if self._js_failures == self._JS_MAX_FAILURES:
+            logger.warning(
+                "JS-мост отключён после %d сбоев (%s) — ждём перезагрузки UI",
+                self._js_failures, reason,
+            )
+
+    def _js_bridge_reset(self) -> None:
+        if self._js_failures:
+            logger.info("JS-мост восстановлен")
+        self._js_failures = 0
+
+    async def _eval_js(self, js: str) -> object:
+        """evaluate_javascript с таймаутом и учётом сбоев моста."""
+        if not self._js_bridge_ok():
+            return None
+        try:
+            return await asyncio.wait_for(
+                self.webview.evaluate_javascript(js), timeout=self._JS_TIMEOUT
+            )
+        except asyncio.TimeoutError:
+            self._js_bridge_failed("timeout")
+            return None
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            self._js_bridge_failed(str(e))
+            logger.debug("JS eval failed: %s", e)
+            return None
+
     async def _push_js_raw(self, js: str) -> None:
         # Safety check: don't push JS when window is hidden to tray
         # This prevents WebView2 evaluate_javascript from hanging on hidden window
         if self._is_hidden_to_tray:
             return
-        try:
-            await self.webview.evaluate_javascript(js)
-        except Exception as e:
-            logger.debug("JS push failed: %s", e)
+        await self._eval_js(js)
 
     async def _push_js(self, js: str) -> None:
         if self._is_resizing or self._is_hidden_to_tray:

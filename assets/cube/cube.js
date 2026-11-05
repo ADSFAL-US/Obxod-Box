@@ -139,10 +139,27 @@
   }
 
   function onPointerMove(event) {
-    const width = document.documentElement.clientWidth || global.innerWidth;
-    const height = document.documentElement.clientHeight || global.innerHeight;
-    target.x = (event.clientX / width) * 2 - 1;
-    target.y = (event.clientY / height) * 2 - 1;
+    if (!ctx) return;
+    // Точка привязки взгляда — центр куба, а не окна:
+    // куб может быть смещён (например, при открытых настройках).
+    // Берём .face-area (без idle-смещения), чтобы не было обратной связи.
+    const rect = (ctx.root || ctx.container).getBoundingClientRect();
+    const cx = rect.left + rect.width / 2;
+    const cy = rect.top + rect.height / 2;
+    const halfW = Math.max(1, (document.documentElement.clientWidth || global.innerWidth) / 2);
+    const halfH = Math.max(1, (document.documentElement.clientHeight || global.innerHeight) / 2);
+    target.x = clamp((event.clientX - cx) / halfW, -1, 1);
+    target.y = clamp((event.clientY - cy) / halfH, -1, 1);
+  }
+
+  function clamp(v, min, max) {
+    return v < min ? min : v > max ? max : v;
+  }
+
+  /** Сброс взгляда в нейтраль (после смещения куба). */
+  function resetLook() {
+    target.x = 0;
+    target.y = 0;
   }
 
   function resetPointer() {
@@ -328,6 +345,13 @@
     else stopIdle();
   }
 
+  /** Пересчёт точки привязки взгляда (после смещения куба). */
+  function refreshAnchor() {
+    // Позиция куба читается заново на каждом mousemove, поэтому достаточно
+    // мягко вернуть взгляд в нейтраль — без рывка.
+    resetLook();
+  }
+
   function onToggle(cb) {
     toggleHandler = typeof cb === "function" ? cb : null;
   }
@@ -340,6 +364,7 @@
     stopAccent: stopAccent,
     registerAnimation: registerAnimation,
     setWindowVisible: setWindowVisible,
+    refreshAnchor: refreshAnchor,
     onToggle: onToggle,
     /** @private debug */
     _registry: registry,

@@ -17,6 +17,49 @@
     color-scheme: dark;
   }
 
+  :root {
+    /* Панель не шире 420px и всегда оставляет справа полосу под тоггл,
+       чтобы его можно было нажать при открытых настройках. */
+    --panel-w: min(420px, calc(100vw - 200px));
+    --panel-shift: calc(var(--panel-w) / 2);
+    --pickers-w: clamp(300px, 70vw, 560px);
+  }
+
+  /* Узкое окно: на две колонки места нет — панель на всю ширину,
+     а тоггл поднимаем над ней и резервируем под него место внизу. */
+  @media (max-width: 519px) {
+    :root {
+      --panel-w: 100vw;
+      --panel-shift: 0px;
+      --pickers-w: clamp(260px, 88vw, 480px);
+    }
+    body.settings-open .toggle-wrapper { z-index: 200; }
+    body.settings-open .settings-body { padding-bottom: 96px; }
+  }
+
+  /* Быстрые настройки: куб и остальной UI уезжают в правую половину окна */
+  .face-area,
+  .pickers,
+  .toggle-wrapper {
+    transition: left 0.34s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  /* Ширина списка тоже едет плавно. Обе стороны заданы одной структурой
+     min(clamp(...), <длина>) — иначе браузер не интерполирует значение. */
+  .pickers {
+    width: min(var(--pickers-w), 100vw);
+    transition:
+      left 0.34s cubic-bezier(0.4, 0, 0.2, 1),
+      width 0.34s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  body.settings-open .face-area,
+  body.settings-open .pickers,
+  body.settings-open .toggle-wrapper {
+    left: calc(50% + var(--panel-shift));
+  }
+  body.settings-open .pickers {
+    width: min(var(--pickers-w), calc(100vw - 2 * var(--panel-shift) - 24px));
+  }
+
   .import-btn {
     position: absolute;
     top: clamp(12px, 3vh, 24px);
@@ -105,7 +148,7 @@
     top: 58%;
     left: 50%;
     transform: translateX(-50%);
-    width: clamp(300px, 70vw, 560px);
+    width: min(var(--pickers-w), 100vw);
     display: flex;
     flex-direction: column;
     gap: 6px;
@@ -465,6 +508,14 @@
   }
   .info:hover { opacity: 0.7; }
 
+  /* при сдвиге вправо подсказка раскрывается влево, чтобы не уехать за окно */
+  body.settings-open .info-box {
+    left: auto;
+    right: calc(100% + 10px);
+    transform: translateX(10px);
+  }
+  body.settings-open .info-box.visible { transform: translateX(0); }
+
   .info-box {
     position: absolute;
     left: calc(100% + 10px);
@@ -501,13 +552,21 @@
     pointer-events: none;
     visibility: hidden;
   }
-  .settings-root.open { pointer-events: auto; visibility: visible; }
+  /* корень не перехватывает клики: куб и тоггл остаются рабочими */
+  .settings-root.open { visibility: visible; }
 
+  /* затемнение только у края панели — рабочая область справа остаётся видимой */
   .settings-backdrop {
     position: absolute;
     inset: 0;
-    background: rgba(0,0,0,0.55);
+    background: linear-gradient(
+      to right,
+      rgba(0,0,0,0.45) 0,
+      rgba(0,0,0,0.18) calc(var(--panel-w) * 0.75),
+      rgba(0,0,0,0) calc(var(--panel-w) + 40px)
+    );
     opacity: 0;
+    pointer-events: none;
     transition: opacity 0.25s ease;
   }
   .settings-root.open .settings-backdrop { opacity: 1; }
@@ -515,8 +574,9 @@
   .settings-panel {
     position: absolute;
     top: 0; left: 0;
-    width: min(420px, 92vw);
+    width: var(--panel-w);
     height: 100%;
+    pointer-events: auto;
     background: #2d2d2d;
     border-right: 1px solid #3a3a3a;
     box-shadow: 4px 0 24px rgba(0,0,0,0.55);
@@ -612,6 +672,151 @@
     user-select: text;
   }
 
+  /* ── Кнопка перехода в полные настройки ─────────────────────────── */
+  .settings-more {
+    margin: 18px 20px 0;
+    padding: 11px 16px;
+    border-radius: 10px;
+    background: #3a3a3a;
+    border: 1px solid #4a4a4a;
+    color: #e8e8e8;
+    font-size: 13px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    cursor: pointer;
+    transition: background 0.18s ease, border-color 0.18s ease, transform 0.18s ease;
+  }
+  .settings-more:hover {
+    background: #454545;
+    border-color: #6c5ce7;
+    transform: translateY(-1px);
+  }
+  .settings-more .arrow { color: #8b7cf0; font-size: 15px; line-height: 1; }
+
+  /* ── Полные настройки: на всё окно, вкладки слева ───────────────── */
+  .settings-full {
+    position: absolute;
+    inset: 0;
+    pointer-events: auto;
+    background: #2d2d2d;
+    display: flex;
+    transform: translateX(100%);
+    opacity: 0;
+    visibility: hidden;
+    transition:
+      transform 0.34s cubic-bezier(0.4, 0, 0.2, 1),
+      opacity 0.28s ease,
+      visibility 0s linear 0.34s;
+    z-index: 2;
+  }
+  .settings-root.full .settings-full {
+    transform: translateX(0);
+    opacity: 1;
+    visibility: visible;
+    transition:
+      transform 0.34s cubic-bezier(0.4, 0, 0.2, 1),
+      opacity 0.28s ease,
+      visibility 0s;
+  }
+  /* быстрая панель уезжает влево, пока открыты полные настройки */
+  .settings-root.full .settings-panel { transform: translateX(-100%); }
+  .settings-root.full .settings-backdrop { opacity: 0; pointer-events: none; }
+
+  .settings-rail {
+    width: clamp(150px, 26vw, 210px);
+    flex-shrink: 0;
+    background: #262626;
+    border-right: 1px solid #3a3a3a;
+    display: flex;
+    flex-direction: column;
+    padding: 14px 10px;
+    gap: 4px;
+    overflow-y: auto;
+  }
+  .settings-rail::-webkit-scrollbar { width: 6px; }
+  .settings-rail::-webkit-scrollbar-thumb { background: #555; border-radius: 3px; }
+
+  .settings-back {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 9px 10px;
+    margin-bottom: 10px;
+    border-radius: 9px;
+    color: #bbb;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease;
+  }
+  .settings-back:hover { background: #333; color: #fff; }
+  .settings-back .chev { font-size: 15px; line-height: 1; }
+
+  .settings-tab {
+    position: relative;
+    padding: 10px 12px;
+    border-radius: 9px;
+    font-size: 13px;
+    color: #aaa;
+    cursor: pointer;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    transition: background 0.15s ease, color 0.15s ease;
+  }
+  .settings-tab:hover { background: #303030; color: #ddd; }
+  .settings-tab.active { background: #3a3a3a; color: #fff; font-weight: 600; }
+  .settings-tab.active::before {
+    content: '';
+    position: absolute;
+    left: 0; top: 50%;
+    width: 3px; height: 18px;
+    margin-top: -9px;
+    border-radius: 0 3px 3px 0;
+    background: #6c5ce7;
+  }
+
+  .settings-content {
+    flex: 1;
+    min-width: 0;
+    overflow-y: auto;
+    padding: 22px clamp(18px, 4vw, 40px) 40px;
+  }
+  .settings-content::-webkit-scrollbar { width: 6px; }
+  .settings-content::-webkit-scrollbar-thumb { background: #555; border-radius: 3px; }
+
+  .settings-page {
+    display: none;
+    max-width: 720px;
+    animation: settings-page-in 0.26s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  .settings-page.active { display: block; }
+  @keyframes settings-page-in {
+    from { opacity: 0; transform: translateX(14px); }
+    to   { opacity: 1; transform: translateX(0); }
+  }
+  .settings-page h3 {
+    margin: 0 0 4px;
+    font-size: 17px;
+    font-weight: 600;
+    color: #fff;
+  }
+  .settings-page .settings-section { padding: 0; }
+  .settings-page .settings-section-title { margin-top: 18px; }
+
+  .settings-full .settings-item { padding: 12px 0; }
+  .settings-full .settings-item select,
+  .settings-full .settings-item input[type="text"] { max-width: 260px; }
+
+  @media (max-width: 520px), (max-height: 560px) {
+    .settings-rail { width: 132px; padding: 10px 6px; }
+    .settings-tab { padding: 9px 8px; font-size: 12px; }
+    .settings-content { padding: 16px 14px 28px; }
+  }
+
   .switch {
     position: relative; display: inline-block;
     width: 42px; height: 24px; flex-shrink: 0;
@@ -633,7 +838,8 @@
 
   @media (max-width: 520px), (max-height: 560px) {
     body { overflow: auto; }
-    .pickers { top: 58%; width: clamp(260px, 88vw, 480px); }
+    :root { --pickers-w: clamp(260px, 88vw, 480px); }
+    .pickers { top: 58%; }
     .toggle-wrapper { bottom: 16px; }
     .toggle-segment { width: 40px; height: 40px; font-size: 8px; }
     .picker-list { max-height: 150px; }
@@ -736,6 +942,8 @@
 
   <div class="settings-root" id="settingsRoot">
     <div class="settings-backdrop" onclick="closeSettings()"></div>
+
+    <!-- ── Быстрые настройки ─────────────────────────────────────── -->
     <div class="settings-panel">
       <div class="settings-header">
         <h2>Настройки</h2>
@@ -747,8 +955,8 @@
           <div class="settings-section-title">Xray</div>
 
           <div class="settings-item">
-            <label for="setLoglevel">Уровень логирования</label>
-            <select id="setLoglevel">
+            <label for="qLoglevel">Уровень логирования</label>
+            <select id="qLoglevel">
               <option value="debug">debug</option>
               <option value="info">info</option>
               <option value="warning">warning</option>
@@ -756,77 +964,20 @@
               <option value="none">none</option>
             </select>
           </div>
-
-          <div class="settings-item">
-            <label for="setLogRotate">Хранить лог (мин)</label>
-            <input type="number" id="setLogRotate" min="1" max="1440" step="1">
-          </div>
         </div>
 
         <div class="settings-section">
           <div class="settings-section-title">Маршрутизация</div>
 
           <div class="settings-item">
-            <label for="setRoutingSet">Набор правил</label>
-            <select id="setRoutingSet">
+            <label for="qRoutingSet">Набор правил</label>
+            <select id="qRoutingSet">
               <option value="">Без маршрутизации</option>
             </select>
           </div>
 
-          <div class="settings-hint" id="routingSetHint">
+          <div class="settings-hint" id="qRoutingSetHint">
             Выберите набор правил, чтобы направлять трафик по гео-признакам.
-          </div>
-        </div>
-
-        <div class="settings-section">
-          <div class="settings-section-title">Сеть</div>
-
-          <div class="settings-item">
-            <label for="setNetWatch">Следить за состоянием сети</label>
-            <label class="switch">
-              <input type="checkbox" id="setNetWatch">
-              <span></span>
-            </label>
-          </div>
-
-          <div class="settings-item">
-            <label for="setNetInterval">Интервал проверки (с)</label>
-            <input type="number" id="setNetInterval" min="1" max="60" step="1">
-          </div>
-
-          <div class="settings-item">
-            <label for="setAutoReconnect">Автопереподключение</label>
-            <label class="switch">
-              <input type="checkbox" id="setAutoReconnect">
-              <span></span>
-            </label>
-          </div>
-
-          <div class="settings-item">
-            <label for="setRestartIface">Рестарт при смене интерфейса</label>
-            <label class="switch">
-              <input type="checkbox" id="setRestartIface">
-              <span></span>
-            </label>
-          </div>
-        </div>
-
-        <div class="settings-section">
-          <div class="settings-section-title">Пинг</div>
-
-          <div class="settings-item">
-            <label for="setPingUrl">URL для пинга</label>
-            <input type="text" id="setPingUrl" placeholder="https://...">
-          </div>
-
-          <div class="settings-item">
-            <label for="setPingTimeout">Таймаут (с)</label>
-            <input type="number" id="setPingTimeout" min="1" max="30" step="1">
-          </div>
-
-          <div class="settings-item">
-            <label for="setPingConcurrency">Одновременных пингов</label>
-            <input type="number" id="setPingConcurrency" min="1" max="20" step="1">
           </div>
         </div>
 
@@ -834,9 +985,9 @@
           <div class="settings-section-title">Автообновления</div>
 
           <div class="settings-item">
-            <label for="setAutoUpdate">Включить авто обновления</label>
+            <label for="qAutoUpdate">Включить авто обновления</label>
             <label class="switch">
-              <input type="checkbox" id="setAutoUpdate">
+              <input type="checkbox" id="qAutoUpdate">
               <span></span>
             </label>
           </div>
@@ -847,7 +998,145 @@
 
           <div class="settings-item">
             <label>Версия</label>
-            <span class="settings-value" id="appVersion">__APP_VERSION__</span>
+            <span class="settings-value" id="qAppVersion">__APP_VERSION__</span>
+          </div>
+        </div>
+
+        <div class="settings-more" onclick="openFullSettings()">
+          <span>Все настройки</span>
+          <span class="arrow">→</span>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- ── Полные настройки ──────────────────────────────────────── -->
+    <div class="settings-full" id="settingsFull">
+      <div class="settings-rail">
+        <div class="settings-back" onclick="closeFullSettings()">
+          <span class="chev">←</span><span>Назад</span>
+        </div>
+        <div class="settings-tab active" data-tab="xray">Xray</div>
+        <div class="settings-tab" data-tab="routing">Маршрутизация</div>
+        <div class="settings-tab" data-tab="network">Сеть</div>
+        <div class="settings-tab" data-tab="ping">Пинг</div>
+        <div class="settings-tab" data-tab="updates">Обновления</div>
+        <div class="settings-tab" data-tab="about">О приложении</div>
+      </div>
+
+      <div class="settings-content" id="settingsContent">
+
+        <div class="settings-page active" data-page="xray">
+          <h3>Xray</h3>
+          <div class="settings-section">
+            <div class="settings-item">
+              <label for="setLoglevel">Уровень логирования</label>
+              <select id="setLoglevel">
+                <option value="debug">debug</option>
+                <option value="info">info</option>
+                <option value="warning">warning</option>
+                <option value="error">error</option>
+                <option value="none">none</option>
+              </select>
+            </div>
+
+            <div class="settings-item">
+              <label for="setLogRotate">Хранить лог (мин)</label>
+              <input type="number" id="setLogRotate" min="1" max="1440" step="1">
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-page" data-page="routing">
+          <h3>Маршрутизация</h3>
+          <div class="settings-section">
+            <div class="settings-item">
+              <label for="setRoutingSet">Набор правил</label>
+              <select id="setRoutingSet">
+                <option value="">Без маршрутизации</option>
+              </select>
+            </div>
+
+            <div class="settings-hint" id="routingSetHint">
+              Выберите набор правил, чтобы направлять трафик по гео-признакам.
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-page" data-page="network">
+          <h3>Сеть</h3>
+          <div class="settings-section">
+            <div class="settings-item">
+              <label for="setNetWatch">Следить за состоянием сети</label>
+              <label class="switch">
+                <input type="checkbox" id="setNetWatch">
+                <span></span>
+              </label>
+            </div>
+
+            <div class="settings-item">
+              <label for="setNetInterval">Интервал проверки (с)</label>
+              <input type="number" id="setNetInterval" min="1" max="60" step="1">
+            </div>
+
+            <div class="settings-item">
+              <label for="setAutoReconnect">Автопереподключение</label>
+              <label class="switch">
+                <input type="checkbox" id="setAutoReconnect">
+                <span></span>
+              </label>
+            </div>
+
+            <div class="settings-item">
+              <label for="setRestartIface">Рестарт при смене интерфейса</label>
+              <label class="switch">
+                <input type="checkbox" id="setRestartIface">
+                <span></span>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-page" data-page="ping">
+          <h3>Пинг</h3>
+          <div class="settings-section">
+            <div class="settings-item">
+              <label for="setPingUrl">URL для пинга</label>
+              <input type="text" id="setPingUrl" placeholder="https://...">
+            </div>
+
+            <div class="settings-item">
+              <label for="setPingTimeout">Таймаут (с)</label>
+              <input type="number" id="setPingTimeout" min="1" max="30" step="1">
+            </div>
+
+            <div class="settings-item">
+              <label for="setPingConcurrency">Одновременных пингов</label>
+              <input type="number" id="setPingConcurrency" min="1" max="20" step="1">
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-page" data-page="updates">
+          <h3>Обновления</h3>
+          <div class="settings-section">
+            <div class="settings-item">
+              <label for="setAutoUpdate">Включить авто обновления</label>
+              <label class="switch">
+                <input type="checkbox" id="setAutoUpdate">
+                <span></span>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-page" data-page="about">
+          <h3>О приложении</h3>
+          <div class="settings-section">
+            <div class="settings-item">
+              <label>Версия</label>
+              <span class="settings-value" id="appVersion">__APP_VERSION__</span>
+            </div>
           </div>
         </div>
 
@@ -1122,7 +1411,12 @@
     document.addEventListener('keydown', function(e) {
       if (e.key === 'Escape') {
         closePicker();
-        closeSettings();
+        const root = document.getElementById('settingsRoot');
+        if (root && root.classList.contains('full')) {
+          closeFullSettings();
+        } else {
+          closeSettings();
+        }
       }
     });
 
@@ -1213,117 +1507,181 @@
 
     function openSettings() {
       closePicker();
-      document.getElementById('settingsRoot').classList.add('open');
+      const root = document.getElementById('settingsRoot');
+      if (!root) return;
+      root.classList.remove('full');
+      root.classList.add('open');
+      document.body.classList.add('settings-open');
+      refreshCubeAnchor();
     }
     function closeSettings() {
       const root = document.getElementById('settingsRoot');
-      if (root) root.classList.remove('open');
+      if (!root) return;
+      root.classList.remove('open', 'full');
+      document.body.classList.remove('settings-open');
+      refreshCubeAnchor();
     }
+    function openFullSettings() {
+      const root = document.getElementById('settingsRoot');
+      if (!root) return;
+      root.classList.add('full');
+      const content = document.getElementById('settingsContent');
+      if (content) content.scrollTop = 0;
+    }
+    function closeFullSettings() {
+      const root = document.getElementById('settingsRoot');
+      if (root) root.classList.remove('full');
+    }
+
+    // Куб смещается вместе с панелью — пересчитываем точку привязки взгляда.
+    function refreshCubeAnchor() {
+      if (window.ObxodCube && window.ObxodCube.refreshAnchor) {
+        window.ObxodCube.refreshAnchor();
+      }
+    }
+
+    function selectSettingsTab(name) {
+      document.querySelectorAll('.settings-tab').forEach(t => {
+        t.classList.toggle('active', t.dataset.tab === name);
+      });
+      document.querySelectorAll('.settings-page').forEach(p => {
+        p.classList.toggle('active', p.dataset.page === name);
+      });
+      const content = document.getElementById('settingsContent');
+      if (content) content.scrollTop = 0;
+    }
+
+    document.querySelectorAll('.settings-tab').forEach(tab => {
+      tab.addEventListener('click', () => selectSettingsTab(tab.dataset.tab));
+    });
 
     function sendSetting(key, value) {
       sendToPython({ action: "update_setting", key: key, value: value });
     }
 
-    (function bindSettings() {
-      const map = [
-        ['setLoglevel',       'xray_loglevel',                  'value'],
-        ['setLogRotate',      'xray_log_rotate_minutes',        'int'],
-        ['setNetWatch',       'network_watch_enabled',          'checked'],
-        ['setNetInterval',    'network_watch_interval',         'int'],
-        ['setAutoReconnect',  'network_auto_reconnect',         'checked'],
-        ['setRestartIface',   'network_restart_on_iface_change','checked'],
-        ['setAutoUpdate',     'auto_update_enabled',            'checked'],
-        ['setPingUrl',        'ping_url',                       'url'],
-        ['setPingTimeout',    'ping_timeout',                   'int'],
-        ['setPingConcurrency','ping_concurrency',               'int'],
-      ];
-      map.forEach(([id, key, kind]) => {
+    // Пары «быстрый / полный» контрол для одной и той же настройки.
+    const SETTING_CONTROLS = {
+      xray_loglevel:                  [['qLoglevel', 'value'], ['setLoglevel', 'value']],
+      xray_log_rotate_minutes:        [['setLogRotate', 'int']],
+      network_watch_enabled:          [['setNetWatch', 'checked']],
+      network_watch_interval:         [['setNetInterval', 'int']],
+      network_auto_reconnect:         [['setAutoReconnect', 'checked']],
+      network_restart_on_iface_change:[['setRestartIface', 'checked']],
+      auto_update_enabled:            [['qAutoUpdate', 'checked'], ['setAutoUpdate', 'checked']],
+      ping_url:                       [['setPingUrl', 'url']],
+      ping_timeout:                   [['setPingTimeout', 'int']],
+      ping_concurrency:               [['setPingConcurrency', 'int']],
+    };
+
+    function applySettingValue(key, value) {
+      (SETTING_CONTROLS[key] || []).forEach(([id, kind]) => {
         const el = document.getElementById(id);
         if (!el) return;
-        el.addEventListener('change', () => {
-          let value;
-          if (kind === 'checked') value = el.checked;
-          else if (kind === 'int') value = parseInt(el.value, 10);
-          else value = el.value.trim();
+        if (kind === 'checked') el.checked = !!value;
+        else el.value = value;
+      });
+    }
 
-          if (kind === 'int' && (!Number.isFinite(value) || value < 1)) {
-            el.focus();
-            return;
-          }
-          if (kind === 'url' && !/^https?:\/\//i.test(value)) {
-            el.focus();
-            return;
-          }
-          sendSetting(key, value);
+    (function bindSettings() {
+      Object.keys(SETTING_CONTROLS).forEach(key => {
+        SETTING_CONTROLS[key].forEach(([id, kind]) => {
+          const el = document.getElementById(id);
+          if (!el) return;
+          el.addEventListener('change', () => {
+            let value;
+            if (kind === 'checked') value = el.checked;
+            else if (kind === 'int') value = parseInt(el.value, 10);
+            else value = el.value.trim();
+
+            if (kind === 'int' && (!Number.isFinite(value) || value < 1)) {
+              el.focus();
+              return;
+            }
+            if (kind === 'url' && !/^https?:\/\//i.test(value)) {
+              el.focus();
+              return;
+            }
+            applySettingValue(key, value);
+            sendSetting(key, value);
+          });
         });
       });
 
-      const routingEl = document.getElementById('setRoutingSet');
-      if (routingEl) {
-        routingEl.addEventListener('change', () => {
-          const val = routingEl.value || '';
+      ['qRoutingSet', 'setRoutingSet'].forEach(id => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.addEventListener('change', () => {
+          const val = el.value || '';
+          ['qRoutingSet', 'setRoutingSet'].forEach(otherId => {
+            const other = document.getElementById(otherId);
+            if (other) other.value = val;
+          });
           sendSetting('routing_set', val === '' ? null : val);
           updateRoutingHint();
         });
-      }
+      });
     })();
 
     function updateRoutingHint() {
       const el = document.getElementById('setRoutingSet');
-      const hint = document.getElementById('routingSetHint');
-      if (!el || !hint) return;
+      if (!el) return;
       const opt = el.options[el.selectedIndex];
+      let text;
       if (opt && opt.title) {
-        hint.textContent = opt.title;
+        text = opt.title;
       } else if (!el.value) {
-        hint.textContent = 'Выберите набор правил, чтобы направлять трафик по гео-признакам.';
+        text = 'Выберите набор правил, чтобы направлять трафик по гео-признакам.';
       } else {
-        hint.textContent = 'Правила набора будут применены к трафику туннеля.';
+        text = 'Правила набора будут применены к трафику туннеля.';
       }
+      ['routingSetHint', 'qRoutingSetHint'].forEach(id => {
+        const hint = document.getElementById(id);
+        if (hint) hint.textContent = text;
+      });
     }
 
     window.setRoutingSets = function(sets, active) {
-      const el = document.getElementById('setRoutingSet');
-      if (!el) return;
-      el.innerHTML = '';
-      const noneOpt = document.createElement('option');
-      noneOpt.value = '';
-      noneOpt.textContent = 'Без маршрутизации';
-      el.appendChild(noneOpt);
+      ['qRoutingSet', 'setRoutingSet'].forEach(id => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.innerHTML = '';
+        const noneOpt = document.createElement('option');
+        noneOpt.value = '';
+        noneOpt.textContent = 'Без маршрутизации';
+        el.appendChild(noneOpt);
 
-      (sets || []).forEach(s => {
-        const o = document.createElement('option');
-        o.value = s.name;
-        o.textContent = s.title || s.name;
-        if (s.description) o.title = s.description;
-        el.appendChild(o);
+        (sets || []).forEach(s => {
+          const o = document.createElement('option');
+          o.value = s.name;
+          o.textContent = s.title || s.name;
+          if (s.description) o.title = s.description;
+          el.appendChild(o);
+        });
+
+        el.value = active || '';
       });
-
-      el.value = active || '';
       updateRoutingHint();
     };
 
     window.setSettings = function(cfg) {
       if (!cfg || typeof cfg !== 'object') return;
-      const apply = (id, value, kind) => {
-        const el = document.getElementById(id);
-        if (!el) return;
-        if (kind === 'checked') el.checked = !!value;
-        else el.value = value;
-      };
-      apply('setLoglevel',      cfg.xray_loglevel || 'warning',               'value');
-      apply('setLogRotate',     cfg.xray_log_rotate_minutes ?? 10,            'value');
-      apply('setNetWatch',      cfg.network_watch_enabled !== false,          'checked');
-      apply('setNetInterval',   cfg.network_watch_interval ?? 2,              'value');
-      apply('setAutoReconnect', cfg.network_auto_reconnect !== false,         'checked');
-      apply('setRestartIface',  cfg.network_restart_on_iface_change !== false,'checked');
-      apply('setAutoUpdate',    cfg.auto_update_enabled !== false,            'checked');
-      apply('setPingUrl',       cfg.ping_url || '',                           'value');
-      apply('setPingTimeout',   cfg.ping_timeout ?? 5,                        'value');
-      apply('setPingConcurrency', cfg.ping_concurrency ?? 8,                  'value');
+      applySettingValue('xray_loglevel',                   cfg.xray_loglevel || 'warning');
+      applySettingValue('xray_log_rotate_minutes',         cfg.xray_log_rotate_minutes ?? 10);
+      applySettingValue('network_watch_enabled',           cfg.network_watch_enabled !== false);
+      applySettingValue('network_watch_interval',          cfg.network_watch_interval ?? 2);
+      applySettingValue('network_auto_reconnect',          cfg.network_auto_reconnect !== false);
+      applySettingValue('network_restart_on_iface_change', cfg.network_restart_on_iface_change !== false);
+      applySettingValue('auto_update_enabled',             cfg.auto_update_enabled !== false);
+      applySettingValue('ping_url',                        cfg.ping_url || '');
+      applySettingValue('ping_timeout',                    cfg.ping_timeout ?? 5);
+      applySettingValue('ping_concurrency',                cfg.ping_concurrency ?? 8);
+
       const rs = document.getElementById('setRoutingSet');
       if (rs && rs.options.length > 0) {
-        rs.value = cfg.routing_set || '';
+        ['qRoutingSet', 'setRoutingSet'].forEach(id => {
+          const el = document.getElementById(id);
+          if (el) el.value = cfg.routing_set || '';
+        });
         updateRoutingHint();
       }
     };

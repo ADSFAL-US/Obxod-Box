@@ -45,9 +45,35 @@ check_tools() {
   command -v tar  >/dev/null 2>&1 || die "Нужен tar (обычно уже есть)."
 }
 
+# Доустановить/обновить зависимости, если версии в requirements.txt разошлись
+# с тем, что уже стоит в рантайме (например, toga 0.5.7 с фиксом зависания ввода).
+sync_requirements() {
+  if "$PY" - "$REQ" <<'PY'
+import importlib.metadata as md
+import pathlib
+import sys
+
+text = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+pins = [
+    line.split("==", 1)[1].split(";")[0].strip()
+    for line in text.splitlines()
+    if line.strip().lower().startswith("toga==")
+]
+sys.exit(0 if pins and md.version("toga") == pins[0] else 1)
+PY
+  then
+    return 0
+  fi
+
+  log "Обновляю зависимости под requirements.txt"
+  "$PY" -m pip install --no-warn-script-location --disable-pip-version-check -r "$REQ" \
+    || die "Не удалось обновить зависимости."
+}
+
 ensure_runtime() {
   # Уже готово?
   if [[ -x "$PY" ]] && "$PY" -c "import toga, psutil" 2>/dev/null; then
+    sync_requirements
     return 0
   fi
 

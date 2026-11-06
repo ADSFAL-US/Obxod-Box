@@ -30,16 +30,6 @@ from auto_update import (
 )
 from version import __version__ as APP_VERSION
 
-# Безопасный импорт для Windows (Pylance не видит System.Drawing на других ОС)
-if sys.platform == "win32":
-    try:
-        import clr
-
-        clr.AddReference("System.Drawing")
-        from System.Drawing import Color  # type: ignore
-    except ImportError:
-        pass
-
 logger = logging.getLogger(__name__)
 
 BG_COLOR = (45, 45, 45)
@@ -100,8 +90,8 @@ class LoadingWindow:
         self._center_window(self.window, window_size, app)
         try:
             self.window.hide()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("__init__: %s", exc)
         self._apply_dark_titlebar()
         self._apply_native_backcolor(getattr(self.window, "_impl", None) and self.window._impl.native)
 
@@ -139,8 +129,8 @@ class LoadingWindow:
                     max(0, (1920 - window_size[0]) // 2),
                     max(0, (1080 - window_size[1]) // 2),
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("_center_window: %s", exc)
 
     def _apply_config(self) -> None:
         """Применяет значения из конфигурации к поведению приложения."""
@@ -164,7 +154,12 @@ class LoadingWindow:
     def _apply_native_backcolor(native):
         if sys.platform != "win32" or native is None:
             return
+        # Импорт clr откладывается до момента вызова: на импорте модуля он
+        # загрузил бы pythonnet с дефолтным .NET Framework и лишил Toga
+        # возможности выбрать .NET Core (это ломало загрузку coreclr).
         try:
+            from System.Drawing import Color  # type: ignore
+
             native.BackColor = Color.FromArgb(*BG_COLOR)
         except Exception as exc:
             logger.debug("BackColor не применился: %s", exc)
@@ -234,8 +229,8 @@ class LoadingWindow:
         # WebKitGTK иногда не применяет DOM-подпись — дублируем в title окна
         try:
             self.window.title = (self._status[:80] if self._status else "Loading")
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("set_status: %s", exc)
         if self._window_shown:
             self._schedule_js(
                 "if(window.setStatus) window.setStatus("
@@ -254,8 +249,8 @@ class LoadingWindow:
         try:
             try:
                 self.window.title = (self._status[:80] if self._status else "Loading")
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("_apply_status: %s", exc)
             await self._eval_js(
                 "if(window.setStatus) window.setStatus("
                 + json.dumps(self._status or "", ensure_ascii=False) + ")"
@@ -308,6 +303,12 @@ class LoadingWindow:
         except Exception as exc:
             logger.error("Этап проверки обновлений упал: %s", exc, exc_info=True)
 
+        # ── .NET Desktop Runtime (для WinForms/Toga) ─────────────────
+        try:
+            await self._ensure_dotnet_stage()
+        except Exception as exc:
+            logger.error("Этап проверки .NET упал: %s", exc, exc_info=True)
+
         try:
             await run_stage(
                 0, 40,
@@ -354,6 +355,75 @@ class LoadingWindow:
 
         self.set_status("Подготовка завершена")
         self.set_progress(95)
+
+    async def _ensure_dotnet_stage(self) -> None:
+        """Предлагает установить .NET Desktop Runtime, если его нет.
+
+        Без .NET Core 10 Toga откатывается на .NET Framework 4.x, и UI иногда
+        перестаёт обрабатывать ввод. Спрашиваем пользователя и, если он не
+        против, ставим официальный Windows Desktop Runtime автоматически.
+        """
+        if sys.platform != "win32":
+            return
+
+        import dotnet_runtime
+
+        if dotnet_runtime.is_installed():
+            logger.info("dotnet: Windows Desktop Runtime уже установлен")
+            # Runtime может быть установлен, но текущий процесс всё равно
+            # стартовал на .NET Framework (например, его поставили только что).
+            # Тогда нужен перезапуск — CLR уже не переключить.
+            if dotnet_runtime.restart_required():
+                self.set_status("Перезапуск для применения .NET Desktop Runtime...")
+                await self._apply_status()
+                await asyncio.sleep(0.5)
+                await asyncio.to_thread(dotnet_runtime.restart_app)
+            return
+
+        major = dotnet_runtime.required_major()
+        self.set_status(f"Требуется .NET Desktop Runtime {major}")
+        await self._apply_status()
+
+        agreed = await asyncio.to_thread(dotnet_runtime.confirm_install, major)
+        if not agreed:
+            logger.info("dotnet: пользователь отказался от установки")
+            self.set_status("Работаю без .NET Desktop Runtime")
+            await self._apply_status()
+            return
+
+        self.set_status(f"Устанавливаю .NET Desktop Runtime {major}...")
+        await self._apply_status()
+
+        def status_cb(text: str) -> None:
+            self.set_status(text)
+
+        def progress_cb(done: int, total: int) -> None:
+            # Полоса прогресса принадлежит этапам загрузки бинарников:
+            # здесь только лог, чтобы индикатор не прыгал назад.
+            if total > 0:
+                pct = int(min(1.0, max(0.0, done / total)) * 100)
+                if pct and pct % 20 == 0:
+                    logger.info("dotnet: загрузка %d%%", pct)
+
+        await asyncio.to_thread(
+            dotnet_runtime.ensure_runtime,
+            progress_cb,
+            status_cb,
+        )
+
+        # CLR выбирается при импорте toga_winforms: чтобы приложение реально
+        # перешло на .NET Core, нужен перезапуск.
+        if dotnet_runtime.restart_required():
+            self.set_status("Перезапуск для применения .NET Desktop Runtime...")
+            await self._apply_status()
+            await asyncio.sleep(0.5)
+            await asyncio.to_thread(dotnet_runtime.restart_app)
+
+        if dotnet_runtime.is_installed():
+            self.set_status(".NET Desktop Runtime готов")
+        else:
+            self.set_status("Работаю без .NET Desktop Runtime")
+        await self._apply_status()
 
     async def _check_update_stage(self) -> None:
         """Проверяет обновления и при необходимости запускает установщик."""

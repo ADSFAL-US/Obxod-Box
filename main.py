@@ -12,14 +12,6 @@ _APP_DIR = Path(__file__).resolve().parent
 if str(_APP_DIR) not in sys.path:
     sys.path.insert(0, str(_APP_DIR))
 
-import toga
-
-import single_instance
-from loading_window import LoadingWindow
-from main_window import MainWindow
-from net_utils import is_admin, relaunch_as_admin, was_elevated_attempt
-from ui_watchdog import UIWatchdog
-
 _LOG_DIR = _APP_DIR / "logs"
 _LOG_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -39,6 +31,25 @@ try:
     faulthandler.enable(file=_FAULT_FILE, all_threads=True)
 except Exception as _e:  # pragma: no cover
     logger.warning("faulthandler не включён: %s", _e)
+
+# ВАЖНО: до импорта toga. Toga загружает CLR при импорте и запоминает
+# выбранный рантайм; чужой DOTNET_ROOT уводит hostfxr на старую установку
+# без нужной версии, и Toga молча откатывается на .NET Framework.
+import dotnet_runtime  # noqa: E402
+
+dotnet_runtime.prepare_env()
+
+# CLR нужно выбрать до импорта наших модулей: они делают `import clr`
+# на уровне модуля, а pythonnet фиксирует рантайм при первой загрузке.
+dotnet_runtime.select_runtime()
+
+import toga  # noqa: E402
+
+import single_instance  # noqa: E402
+from loading_window import LoadingWindow  # noqa: E402
+from main_window import MainWindow  # noqa: E402
+from net_utils import is_admin, relaunch_as_admin, was_elevated_attempt  # noqa: E402
+from ui_watchdog import UIWatchdog  # noqa: E402
 
 
 class App(toga.App):
@@ -181,8 +192,8 @@ class App(toga.App):
             logger.error("Не удалось создать главное окно: %s", e, exc_info=True)
             try:
                 loading_window.set_status(f"Ошибка запуска: {e}")
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("_run_startup_stages: %s", exc)
 
     def on_main_window_ready(self):
         if not self._main_window_ready:

@@ -34,6 +34,13 @@ if errorlevel 1 (
     call :ensure_runtime
     if errorlevel 1 exit /b 1
 )
+
+REM Версии в requirements.txt могли обновиться (например, toga 0.5.7 с фиксом
+REM зависания ввода WinForms). Рантайм при этом уже существует, поэтому
+REM ensure_runtime его не тронет — доустанавливаем поверх.
+call :sync_requirements
+if errorlevel 1 exit /b 1
+
 REM ════════════════════════════════════════════════════════════════
 REM  Запуск
 REM ════════════════════════════════════════════════════════════════
@@ -57,6 +64,26 @@ exit /b !RC!
 if not exist "%~dp0logs" mkdir "%~dp0logs"
 REM Логи приложение пишет само (см. main.py). Консоли не создаём.
 start "" "%PYW%" "%~dp0main.py"
+exit /b 0
+
+
+REM ════════════════════════════════════════════════════════════════
+REM  sync_requirements
+REM ════════════════════════════════════════════════════════════════
+:sync_requirements
+REM Быстрый выход, если установленные версии совпадают с requirements.txt.
+REM Сравнение в Python: разбирать requirements парсером в bat-файле ненадёжно.
+"%PY%" -c "import sys,importlib.metadata as m,pathlib; r=pathlib.Path(sys.argv[1]).read_text(encoding='utf-8'); p=[l.split('==')[1].split(';')[0].strip() for l in r.splitlines() if l.strip().lower().startswith('toga==')]; sys.exit(0 if p and m.version('toga')==p[0] else 1)" "%REQ%" >nul 2>&1
+if not errorlevel 1 exit /b 0
+
+echo.
+echo === Обновляю зависимости под requirements.txt ===
+"%PY%" -m pip install --no-warn-script-location --disable-pip-version-check -r "%REQ%"
+if errorlevel 1 (
+    echo ОШИБКА: не удалось обновить зависимости.
+    pause
+    exit /b 1
+)
 exit /b 0
 
 

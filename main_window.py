@@ -19,7 +19,7 @@ from toga.style import Pack
 
 from config import VALID_MODES
 from network_watcher import NetworkEvent, NetworkState, NetworkWatcher
-from platform_info import get_platform, is_desktop, is_mobile, supports_system_tray
+from platform_info import get_platform, supports_system_tray
 from platform_tray import TrayCallbacks, create_tray
 from version import __version__ as APP_VERSION
 from xray_manager import XrayManager
@@ -34,14 +34,11 @@ SUBSCRIPTION_USER_AGENT = "obxod-box/1.0"
 DEFAULT_PING_URL = "https://www.gstatic.com/generate_204"
 
 _Color = None
-_DrawingIcon = None
-_SystemIcons = None
-_NotifyIcon = None
-_ContextMenu = None
-_MenuItem = None
 _MouseButtons = None
 _SysAction = None
 _WINFORMS_OK = False
+_DockStyle = None
+_FormWindowState = None
 
 if sys.platform == "win32":
     try:
@@ -51,12 +48,9 @@ if sys.platform == "win32":
         clr.AddReference("System.Windows.Forms")
         import System  # type: ignore
         from System.Drawing import Color as _Color  # type: ignore
-        from System.Drawing import Icon as _DrawingIcon  # type: ignore
-        from System.Drawing import SystemIcons as _SystemIcons  # type: ignore
         from System.Windows.Forms import (  # type: ignore
-            ContextMenu as _ContextMenu,
-            MenuItem as _MenuItem,
-            NotifyIcon as _NotifyIcon,
+            DockStyle as _DockStyle,
+            FormWindowState as _FormWindowState,
             MouseButtons as _MouseButtons,
         )
         _SysAction = System.Action
@@ -65,6 +59,20 @@ if sys.platform == "win32":
         logging.getLogger(__name__).warning(
             "WinForms/pythonnet недоступны — трей отключён: %s", _e
         )
+
+
+def _window_state_normal():
+    """FormWindowState.Normal.
+
+    pythonnet 3.x не конвертирует int в enum неявно: `WindowState = 0`
+    бросает TypeError, и присваивание молча не применяется.
+    """
+    return _FormWindowState.Normal if _FormWindowState is not None else 0
+
+
+def _dock_fill():
+    """DockStyle.Fill — по той же причине, что и _window_state_normal()."""
+    return _DockStyle.Fill if _DockStyle is not None else 5
 
 
 # ── HTML верстка: assets/main_ui.html + модуль куба ────────────────
@@ -260,13 +268,13 @@ class MainWindow:
             logger.debug("main window center skipped: %s", exc)
         try:
             self.window.hide()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("__init__: %s", exc)
         self._apply_dark_titlebar()
         try:
             self._apply_native_backcolor(self.window._impl.native)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("__init__: %s", exc)
 
         self._install_size_guard()
         self.window.on_close = self._toga_on_close
@@ -360,9 +368,9 @@ class MainWindow:
     def _ui_deferred(self, fn) -> None:
         """Всегда ставит fn в очередь UI-потока, даже если мы уже на нём.
 
-        Обработчики WinForms-меню (ContextMenu/MenuItem.Click) крутят
-        вложенный модальный цикл. Синхронный Show/Hide/SetBounds внутри него
-        ломает message pump — окно перестаёт отвечать. Поэтому «Открыть» и
+        Обработчики WinForms-меню (ContextMenuStrip/ToolStripMenuItem.Click)
+                крутят вложенный модальный цикл. Синхронный Show/Hide/SetBounds внутри
+                него ломает message pump — окно перестаёт отвечать. Поэтому «Открыть» и
         «Выход» из трея выполняются только после выхода из обработчика.
         """
         try:
@@ -406,8 +414,8 @@ class MainWindow:
         if self._user_requested_exit:
             try:
                 self._dispose_tray()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("_toga_on_close: %s", exc)
             return True
         self.request_hide_to_tray()
         return False
@@ -423,8 +431,8 @@ class MainWindow:
             logger.debug("schedule hide failed: %s", e)
             try:
                 self._hide_to_tray()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("request_hide_to_tray: %s", exc)
 
     def prepare_for_exit(self) -> None:
         """Вызвать перед реальным выходом (dispose tray, stop xray)."""
@@ -450,10 +458,10 @@ class MainWindow:
             native = self.window._impl.native
             try:
                 native.ShowInTaskbar = True
-            except Exception:
-                pass
-        except Exception:
-            pass
+            except Exception as exc:
+                logger.debug("prepare_for_exit: %s", exc)
+        except Exception as exc:
+            logger.debug("prepare_for_exit: %s", exc)
 
     # ------------------------------------------------------------------
     # Геометрия окна
@@ -481,8 +489,8 @@ class MainWindow:
             cur_l, cur_t = int(native.Left), int(native.Top)
             if state == 0 and cur_w >= TRAY_MIN_WIDTH and cur_h >= TRAY_MIN_HEIGHT:
                 left, top, width, height = cur_l, cur_t, cur_w, cur_h
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("_capture_bounds: %s", exc)
 
         if width is None or height is None:
             try:
@@ -492,16 +500,16 @@ class MainWindow:
                     width, height = rw, rh
                     left = int(rb.X) if left is None else left
                     top = int(rb.Y) if top is None else top
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("_capture_bounds: %s", exc)
 
         if width is None or height is None:
             try:
                 sw, sh = self._saved_normal_size
                 if sw >= TRAY_MIN_WIDTH and sh >= TRAY_MIN_HEIGHT:
                     width, height = int(sw), int(sh)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("_capture_bounds: %s", exc)
 
         width, height = self._clamp_size(width or 0, height or 0)
 
@@ -519,9 +527,9 @@ class MainWindow:
         width, height = self._clamp_size(width, height)
         native = self.window._impl.native
         try:
-            native.WindowState = 0
-        except Exception:
-            pass
+            native.WindowState = _window_state_normal()
+        except Exception as exc:
+            logger.debug("_apply_bounds: %s", exc)
         # Только native.SetBounds. НЕ дублируем через self.window.size:
         # Toga переводит window.size в ClientSize, что прибавляет размер
         # рамки к текущему outer-размеру и приводит к «расползанию» окна
@@ -545,13 +553,13 @@ class MainWindow:
         try:
             native = self.window._impl.native
             self._saved_bounds = self._capture_bounds()
-            # Защита от мусорных bounds после minimize/resize race
+            # ?????? ?? ???????? bounds ????? minimize/resize race
             try:
-                l, t, w, h = self._saved_bounds
-                w, h = self._clamp_size(w, h)
-                self._saved_bounds = (l, t, w, h)
-            except Exception:
-                pass
+                left, top, width, height = self._saved_bounds
+                width, height = self._clamp_size(width, height)
+                self._saved_bounds = (left, top, width, height)
+            except Exception as exc:
+                logger.debug("_hide_to_tray: %s", exc)
 
             self._is_hidden_to_tray = True
             self._last_js_visible = False
@@ -562,36 +570,36 @@ class MainWindow:
 
             try:
                 if hasattr(native, "WindowState") and int(native.WindowState) != 0:
-                    native.WindowState = 0
-            except Exception:
-                pass
+                    native.WindowState = _window_state_normal()
+            except Exception as exc:
+                logger.debug("_hide_to_tray: %s", exc)
 
             try:
                 if hasattr(native, "ShowInTaskbar"):
                     native.ShowInTaskbar = False
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("_hide_to_tray: %s", exc)
 
             hidden = False
             try:
                 if hasattr(native, "Hide"):
                     native.Hide()
                     hidden = True
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("_hide_to_tray: %s", exc)
             if not hidden:
                 try:
                     if hasattr(native, "Visible"):
                         native.Visible = False
                         hidden = True
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("_hide_to_tray: %s", exc)
             if not hidden:
                 try:
                     self.window.hide()
                     hidden = True
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("_hide_to_tray: %s", exc)
 
             if not hidden:
                 self._is_hidden_to_tray = False
@@ -612,8 +620,8 @@ class MainWindow:
         try:
             native.Activate()
             native.BringToFront()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("_force_foreground: %s", exc)
 
         if sys.platform != "win32":
             return
@@ -682,15 +690,15 @@ class MainWindow:
         # Dock Fill — после этого ручной ресайз окна сам тянет WebView
         try:
             if hasattr(wv, "Dock"):
-                wv.Dock = 5  # DockStyle.Fill
+                wv.Dock = _dock_fill()
         except Exception as e:
             logger.debug("webview Dock=Fill failed: %s", e)
 
         parent = None
         try:
             parent = wv.Parent
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("_relayout_webview: %s", exc)
 
         cw = ch = None
         for src in (parent, form):
@@ -706,8 +714,8 @@ class MainWindow:
                     cw, ch = int(src.Width), int(src.Height)
                     if cw >= self._WEBVIEW_BROKEN_PX and ch >= self._WEBVIEW_BROKEN_PX:
                         break
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("_relayout_webview: %s", exc)
 
         if cw and ch and cw >= self._WEBVIEW_BROKEN_PX and ch >= self._WEBVIEW_BROKEN_PX:
             try:
@@ -727,13 +735,13 @@ class MainWindow:
             for meth in ("PerformLayout",):
                 try:
                     getattr(obj, meth)()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("_relayout_webview: %s", exc)
             try:
                 if hasattr(obj, "Invalidate"):
                     obj.Invalidate(True)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("_relayout_webview: %s", exc)
 
         try:
             logger.info(
@@ -742,8 +750,8 @@ class MainWindow:
                 getattr(wv, "Width", "?"),
                 getattr(wv, "Height", "?"),
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("_relayout_webview: %s", exc)
 
     def _cancel_relayout_timers(self) -> None:
         for attr in ("_relayout_timer1", "_relayout_timer2"):
@@ -751,8 +759,8 @@ class MainWindow:
             if t is not None:
                 try:
                     t.cancel()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("_cancel_relayout_timers: %s", exc)
                 setattr(self, attr, None)
 
     def _schedule_relayout_webview(self) -> None:
@@ -781,8 +789,8 @@ class MainWindow:
             self._relayout_timer2 = threading.Timer(0.6, _deferred)
             self._relayout_timer2.daemon = True
             self._relayout_timer2.start()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("_deferred: %s", exc)
 
     def _restore_from_tray(self) -> None:
         try:
@@ -795,29 +803,29 @@ class MainWindow:
             try:
                 if hasattr(native, "ShowInTaskbar"):
                     native.ShowInTaskbar = True
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("_restore_from_tray: %s", exc)
             try:
                 if hasattr(native, "Visible"):
                     native.Visible = True
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("_restore_from_tray: %s", exc)
             try:
                 if hasattr(native, "Show"):
                     native.Show()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("_restore_from_tray: %s", exc)
             try:
                 self.window.show()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("_restore_from_tray: %s", exc)
 
             self._apply_bounds(left, top, width, height)
 
             try:
                 self._apply_dark_titlebar()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("_restore_from_tray: %s", exc)
             try:
                 if (
                     _SysAction is not None
@@ -831,23 +839,23 @@ class MainWindow:
             try:
                 if hasattr(native, "Invalidate"):
                     native.Invalidate(True)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("_restore_from_tray: %s", exc)
 
             try:
                 self._force_foreground(native)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("_restore_from_tray: %s", exc)
 
             try:
                 wv = self.webview._impl.native
                 if wv is not None:
                     try:
                         wv.Focus()
-                    except Exception:
-                        pass
-            except Exception:
-                pass
+                    except Exception as exc:
+                        logger.debug("_restore_from_tray: %s", exc)
+            except Exception as exc:
+                logger.debug("_restore_from_tray: %s", exc)
 
             # WebView2 после Hide() часто залипает на крошечном размере (50×50)
             # и серый фон окна — это пустой клиент вокруг него.
@@ -872,8 +880,8 @@ class MainWindow:
                 )
                 t.daemon = True
                 t.start()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("_restore_from_tray: %s", exc)
 
             try:
                 loop = self._main_loop
@@ -890,8 +898,8 @@ class MainWindow:
             # Не оставляем флаг в True если окно уже показали
             try:
                 self._is_hidden_to_tray = False
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("_restore_from_tray: %s", exc)
 
     def _exit_from_tray(self) -> None:
         """Полный выход из меню трея.
@@ -952,9 +960,9 @@ class MainWindow:
                 try:
                     self._saved_bounds = self._capture_bounds()
                     try:
-                        native.WindowState = 0
-                    except Exception:
-                        pass
+                        native.WindowState = _window_state_normal()
+                    except Exception as exc:
+                        logger.debug("_on_native_resize: %s", exc)
                     # Hide на UI-потоке; флаг снимаем только после _hide_to_tray
                     def _do_hide():
                         try:
@@ -1004,8 +1012,8 @@ class MainWindow:
                         nw,
                         nh,
                     )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("_do_hide: %s", exc)
         except Exception as e:
             logger.debug("resize handler error: %s", e)
 
@@ -1216,8 +1224,8 @@ class MainWindow:
                     if text.startswith('"') and text.endswith('"'):
                         try:
                             text = json.loads(text)
-                        except json.JSONDecodeError:
-                            pass
+                        except json.JSONDecodeError as exc:
+                            logger.debug("_poll_js_message_queue: %s", exc)
                     try:
                         items = json.loads(text) if isinstance(text, str) else text
                     except json.JSONDecodeError:
@@ -1232,10 +1240,8 @@ class MainWindow:
                             obj = json.loads(item)
                             if isinstance(obj, dict):
                                 self._dispatch_web_message(obj)
-                        except json.JSONDecodeError:
-                            pass
-            except asyncio.CancelledError:
-                raise
+                        except json.JSONDecodeError as exc:
+                            logger.debug("_poll_js_message_queue: %s", exc)
             except Exception as e:
                 logger.debug("js queue poll: %s", e)
             await asyncio.sleep(0.12)
@@ -1358,8 +1364,6 @@ class MainWindow:
         except asyncio.TimeoutError:
             self._js_bridge_failed("timeout")
             return None
-        except asyncio.CancelledError:
-            raise
         except Exception as e:
             self._js_bridge_failed(str(e))
             logger.debug("JS eval failed: %s", e)
@@ -2074,7 +2078,7 @@ class MainWindow:
 
         await self._push_js_safe("window.setRefreshBusy(true);")
         try:
-            content, headers = await self._fetch_subscription_raw(url)
+            content, _headers = await self._fetch_subscription_raw(url)
             decoded = self._decode_subscription_content(content)
             if decoded is None:
                 raise ValueError("Не удалось декодировать тело подписки.")
@@ -2185,8 +2189,8 @@ class MainWindow:
                 meta["transport"] = net
                 sec = (stream.get("security") or "none").lower()
                 meta["security"] = sec or "none"
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("_extract_metadata_from_xray: %s", exc)
         return meta
 
     @staticmethod
@@ -2221,8 +2225,8 @@ class MainWindow:
             qs = parse_qs(parsed.query)
             meta["transport"] = (qs.get("type", ["tcp"])[0] or "tcp").lower()
             meta["security"] = (qs.get("security", ["none"])[0] or "none").lower()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("_extract_metadata_from_link: %s", exc)
         return meta
 
     @staticmethod

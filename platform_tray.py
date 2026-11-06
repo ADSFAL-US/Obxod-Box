@@ -13,11 +13,10 @@ API:
 from __future__ import annotations
 
 import logging
-import sys
 from dataclasses import dataclass
 from typing import Callable, Protocol
 
-from platform_info import Platform, get_platform, supports_system_tray
+from platform_info import Platform, get_platform
 
 logger = logging.getLogger(__name__)
 
@@ -72,24 +71,26 @@ class WinFormsTray:
             import clr  # type: ignore
             clr.AddReference("System.Drawing")
             clr.AddReference("System.Windows.Forms")
-            import System  # type: ignore
             from System.Drawing import Icon as DrawingIcon  # type: ignore
             from System.Drawing import SystemIcons  # type: ignore
             from System.Windows.Forms import (  # type: ignore
-                ContextMenu, MenuItem, NotifyIcon, MouseButtons,
+                ContextMenuStrip, ToolStripMenuItem, NotifyIcon, MouseButtons,
             )
         except Exception as e:
             logger.warning("WinForms tray unavailable: %s", e)
             return False
 
         try:
-            menu = ContextMenu()
-            item_open = MenuItem("Открыть")
+            # ContextMenu/MenuItem — legacy API: в .NET Core они бросают
+            # PlatformNotSupportedException. ContextMenuStrip работает и там,
+            # и на .NET Framework.
+            menu = ContextMenuStrip()
+            item_open = ToolStripMenuItem("Открыть")
             item_open.Click += lambda s, e: self._callbacks.on_open()
-            item_exit = MenuItem("Выход")
+            item_exit = ToolStripMenuItem("Выход")
             item_exit.Click += lambda s, e: self._callbacks.on_exit()
-            menu.MenuItems.Add(item_open)
-            menu.MenuItems.Add(item_exit)
+            menu.Items.Add(item_open)
+            menu.Items.Add(item_exit)
             self._menu = menu
 
             tray = NotifyIcon()
@@ -102,7 +103,7 @@ class WinFormsTray:
                 tray.Icon = SystemIcons.Application
 
             tray.Text = "Obxod-BOX"
-            tray.ContextMenu = menu
+            tray.ContextMenuStrip = menu
             tray.DoubleClick += lambda s, e: self._callbacks.on_open()
 
             def _on_mouse_up(sender, event):
@@ -130,17 +131,17 @@ class WinFormsTray:
         if tray is not None:
             try:
                 tray.Visible = False
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("dispose: %s", exc)
             try:
                 tray.Dispose()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("dispose: %s", exc)
         if menu is not None:
             try:
                 menu.Dispose()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("dispose: %s", exc)
 
     @property
     def installed(self) -> bool:
@@ -244,8 +245,8 @@ class LinuxTray:
                 except Exception:
                     try:
                         ind.set_icon(str(icon_path.resolve()))
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logger.debug("_try_appindicator: %s", exc)
             else:
                 ind = mod.Indicator.new("obxod-box", icon, cat)
 
@@ -253,8 +254,8 @@ class LinuxTray:
             ind.set_menu(menu)
             try:
                 ind.set_title("Obxod-BOX")
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("_try_appindicator: %s", exc)
 
             self._indicator = ind
             return True
@@ -324,16 +325,16 @@ class LinuxTray:
                     try:
                         from gi.repository import AppIndicator3 as _A  # type: ignore
                         self._indicator.set_status(_A.IndicatorStatus.PASSIVE)
-                    except Exception:
-                        pass
-        except Exception:
-            pass
+                    except Exception as exc:
+                        logger.debug("dispose: %s", exc)
+        except Exception as exc:
+            logger.debug("dispose: %s", exc)
         self._indicator = None
         if self._status_icon is not None:
             try:
                 self._status_icon.set_visible(False)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("dispose: %s", exc)
             self._status_icon = None
         self._menu = None
 

@@ -194,8 +194,8 @@ def _urlretrieve_with_progress(
             downloaded = total
         try:
             progress_cb(int(downloaded), int(total))
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("hook: %s", exc)
 
     urllib.request.urlretrieve(url, dest, reporthook=hook)
 
@@ -219,8 +219,8 @@ def download_wintun(
         if progress_cb is not None:
             try:
                 progress_cb(1, 1)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("download_wintun: %s", exc)
         return dll_path
 
     zip_path = dest_dir / f"wintun-{WINTUN_VERSION}.zip"
@@ -281,8 +281,8 @@ def download_xray(
         if progress_cb is not None:
             try:
                 progress_cb(1, 1)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("download_xray: %s", exc)
         return exe_path
 
     asset = _xray_release_asset()
@@ -341,8 +341,8 @@ def download_geofile(
         if progress_cb is not None:
             try:
                 progress_cb(1, 1)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("download_geofile: %s", exc)
         return dest
 
     dest.parent.mkdir(parents=True, exist_ok=True)

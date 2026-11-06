@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import subprocess
 import sys
 import urllib.request
@@ -158,8 +157,8 @@ def download_installer(
             if total > 0 and downloaded > total:
                 downloaded = total
             progress_cb(int(downloaded), int(total))
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("hook: %s", exc)
 
     urllib.request.urlretrieve(url, dest_path, reporthook=hook)
     logger.info("Установщик скачан: %s (%d байт)", dest_path, dest_path.stat().st_size)

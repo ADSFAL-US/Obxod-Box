@@ -141,9 +141,9 @@ def verify_installation(install_path: Path) -> bool:
     # Check for Python runtime
     pythonw_exe = install_path / "runtime" / "pythonw.exe"
     if not pythonw_exe.exists():
-        print(f"[WARN] pythonw.exe not found in runtime")
+        print("[WARN] pythonw.exe not found in runtime")
     else:
-        print(f"[OK] pythonw.exe found")
+        print("[OK] pythonw.exe found")
 
     # Check critical files
     critical_files = [
@@ -164,15 +164,15 @@ def verify_installation(install_path: Path) -> bool:
     # Check assets
     assets_dir = install_path / 'assets'
     if assets_dir.exists():
-        print(f"[OK] Assets directory found")
+        print("[OK] Assets directory found")
     else:
-        print(f"[FAIL] Assets directory missing")
+        print("[FAIL] Assets directory missing")
         all_ok = False
 
     # Check bin directory
     bin_dir = install_path / 'bin'
     if bin_dir.exists():
-        print(f"[OK] Bin directory found")
+        print("[OK] Bin directory found")
         for f in ['xray.exe', 'wintun.dll']:
             if (bin_dir / f).exists():
                 print(f"  [OK] {f}")
@@ -180,15 +180,15 @@ def verify_installation(install_path: Path) -> bool:
                 print(f"  [FAIL] {f} missing")
                 all_ok = False
     else:
-        print(f"[FAIL] Bin directory missing")
+        print("[FAIL] Bin directory missing")
         all_ok = False
 
     # Check runtime
     runtime_dir = install_path / 'runtime'
     if runtime_dir.exists():
-        print(f"[OK] Runtime directory found")
+        print("[OK] Runtime directory found")
     else:
-        print(f"[FAIL] Runtime directory missing")
+        print("[FAIL] Runtime directory missing")
         all_ok = False
 
     # Check shortcuts
@@ -196,16 +196,16 @@ def verify_installation(install_path: Path) -> bool:
     desktop = Path(os.environ.get('USERPROFILE', '')) / 'Desktop'
     desktop_shortcut = desktop / 'Obxod-BOX.lnk'
     if desktop_shortcut.exists():
-        print(f"[OK] Desktop shortcut found")
+        print("[OK] Desktop shortcut found")
     else:
-        print(f"[WARN] Desktop shortcut not found")
+        print("[WARN] Desktop shortcut not found")
 
     start_menu = Path(os.environ.get('APPDATA', '')) / 'Microsoft' / 'Windows' / 'Start Menu' / 'Programs' / 'Obxod-BOX'
     start_menu_shortcut = start_menu / 'Obxod-BOX.lnk'
     if start_menu_shortcut.exists():
-        print(f"[OK] Start Menu shortcut found")
+        print("[OK] Start Menu shortcut found")
     else:
-        print(f"[WARN] Start Menu shortcut not found")
+        print("[WARN] Start Menu shortcut not found")
 
     return all_ok
 
@@ -222,7 +222,7 @@ def uninstall(install_path: Path) -> bool:
         # Remove installation directory
         import shutil
         shutil.rmtree(install_path)
-        print(f"[OK] Removed installation directory")
+        print("[OK] Removed installation directory")
 
         # Remove shortcuts
         import os
@@ -230,12 +230,15 @@ def uninstall(install_path: Path) -> bool:
         desktop_shortcut = desktop / 'Obxod-BOX.lnk'
         if desktop_shortcut.exists():
             desktop_shortcut.unlink()
-            print(f"[OK] Removed desktop shortcut")
+            print("[OK] Removed desktop shortcut")
 
-        start_menu = Path(os.environ.get('APPDATA', '')) / 'Microsoft' / 'Windows' / 'Start Menu' / 'Programs' / 'Obxod-BOX'
+        start_menu = (
+            Path(os.environ.get('APPDATA', '')) / 'Microsoft' / 'Windows'
+            / 'Start Menu' / 'Programs' / 'Obxod-BOX'
+        )
         if start_menu.exists():
             shutil.rmtree(start_menu)
-            print(f"[OK] Removed Start Menu folder")
+            print("[OK] Removed Start Menu folder")
 
         # Remove uninstall registry entry
         try:
@@ -244,8 +247,8 @@ def uninstall(install_path: Path) -> bool:
                 winreg.HKEY_CURRENT_USER,
                 r"Software\Microsoft\Windows\CurrentVersion\Uninstall\org.obxod.box"
             )
-            print(f"[OK] Removed uninstall registry entry")
-        except:
+            print("[OK] Removed uninstall registry entry")
+        except ImportError:
             pass
 
         print("Uninstall complete!")

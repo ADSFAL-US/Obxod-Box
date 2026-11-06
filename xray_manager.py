@@ -150,8 +150,8 @@ class SupervisorClient:
         if self._sock is not None:
             try:
                 self._sock.close()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("_close_locked: %s", exc)
             self._sock = None
 
     def connect(self) -> bool:
@@ -389,8 +389,8 @@ class XrayManager:
 
             try:
                 proc.kill()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("_spawn_supervisor: %s", exc)
             client.close()
 
         raise RuntimeError(f"Не удалось запустить supervisor: {last_err}")
@@ -412,8 +412,8 @@ class XrayManager:
             try:
                 self._supervisor_proc.kill()
                 self._supervisor_proc.wait(timeout=2.0)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("_ensure_supervisor: %s", exc)
 
         self._supervisor_proc = None
         self._supervisor_client = None
@@ -428,8 +428,8 @@ class XrayManager:
         if client is not None:
             try:
                 client.quit()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("_shutdown_supervisor: %s", exc)
             client.close()
 
         if proc is not None and proc.poll() is None:
@@ -438,10 +438,10 @@ class XrayManager:
             except subprocess.TimeoutExpired:
                 try:
                     proc.kill()
-                except Exception:
-                    pass
-            except Exception:
-                pass
+                except Exception as exc:
+                    logger.debug("_shutdown_supervisor: %s", exc)
+            except Exception as exc:
+                logger.debug("_shutdown_supervisor: %s", exc)
 
     # ------------------------------------------------------------------
     # Сборка runtime-конфига
@@ -513,7 +513,8 @@ class XrayManager:
             try:
                 result = subprocess.run(
                     ["powershell", "-NoProfile", "-Command", ps_command],
-                    capture_output=True, encoding="utf-8", errors="replace", timeout=5,
+                    capture_output=True, encoding="utf-8", errors="replace",
+                    timeout=5, check=False,
                     creationflags=subprocess.CREATE_NO_WINDOW,
                 )
                 name = (result.stdout or "").strip()
@@ -539,7 +540,7 @@ class XrayManager:
             try:
                 r = subprocess.run(
                     ["ip", "-4", "route", "show", "default"],
-                    capture_output=True, text=True, timeout=3,
+                    capture_output=True, text=True, timeout=3, check=False,
                 )
                 for line in (r.stdout or "").splitlines():
                     m = re.search(r"\bdev\s+(\S+)", line)
@@ -650,8 +651,8 @@ class XrayManager:
                 last_err = e
                 try:
                     proc.kill()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("_spawn_ping_xray: %s", exc)
                 continue
 
             deadline = time.monotonic() + min(timeout, 8.0)
@@ -670,8 +671,8 @@ class XrayManager:
             try:
                 proc.kill()
                 proc.wait(timeout=1.0)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("_spawn_ping_xray: %s", exc)
             last_err = RuntimeError("Xray не поднял ping-порт")
 
         raise RuntimeError(f"Не удалось запустить ping-xray: {last_err}")
@@ -690,8 +691,8 @@ class XrayManager:
             try:
                 proc.kill()
                 proc.wait(timeout=2.0)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("ping_config_sync: %s", exc)
 
     # ------------------------------------------------------------------
     # Статус
@@ -834,8 +835,8 @@ class XrayManager:
                                     STATUS_ERROR, f"Xray завершился (код {rc})"
                                 )
                                 return
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logger.debug("_await_ready: %s", exc)
 
                 if ports:
                     if any(_port_open("127.0.0.1", p) for p in ports):

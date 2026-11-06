@@ -69,7 +69,7 @@ def _linux_default_devs() -> list[str]:
     try:
         r = subprocess.run(
             ["ip", "-4", "route", "show", "default"],
-            capture_output=True, text=True, timeout=2,
+            capture_output=True, text=True, timeout=2, check=False,
         )
         for line in (r.stdout or "").splitlines():
             m = re.search(r"\bdev\s+(\S+)", line)
@@ -84,7 +84,7 @@ def _darwin_default_dev() -> str | None:
     try:
         r = subprocess.run(
             ["route", "-n", "get", "default"],
-            capture_output=True, text=True, timeout=2,
+            capture_output=True, text=True, timeout=2, check=False,
         )
         for line in (r.stdout or "").splitlines():
             line = line.strip()

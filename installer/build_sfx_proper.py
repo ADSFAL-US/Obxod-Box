@@ -3,7 +3,6 @@
 7-Zip SFX Builder for Obxod-BOX.
 Creates SFX with installer/, runtime/, install.bat, payload.zip inside 7z archive.
 """
-import os
 import sys
 import shutil
 import zipfile
@@ -61,13 +60,16 @@ class SevenZipSFXBuilder:
             for it in items:
                 ip = self.source_dir / it
                 if ip.is_file():
-                    zf.write(ip, it); print(f"  + {it}")
+                    zf.write(ip, it)
+                    print(f"  + {it}")
                 elif ip.is_dir():
                     for f in ip.rglob("*"):
                         if f.is_file():
                             rel = f.relative_to(self.source_dir)
-                            if any(s in str(rel) for s in skip): continue
-                            zf.write(f, str(rel).replace('\\', '/')); print(f"  + {rel}")
+                            if any(s in str(rel) for s in skip):
+                                continue
+                            zf.write(f, str(rel).replace('\\', '/'))
+                            print(f"  + {rel}")
         print(f"Payload: {payload_path} ({payload_path.stat().st_size/1024/1024:.1f} MB)")
         return payload_path
 
@@ -126,7 +128,7 @@ class SevenZipSFXBuilder:
                     str(archive_path),
                     "installer", "runtime", "install.bat", "payload.zip",
                     "-m0=LZMA2", "-mx=5", "-mf=off", "-bso0", "-bsp0",
-                ], cwd=str(tmp_path), capture_output=True, text=True)
+                ], cwd=str(tmp_path), capture_output=True, text=True, check=False)
                 if r.returncode != 0:
                     raise RuntimeError(f"7z failed: {r.stderr or r.stdout}")
 

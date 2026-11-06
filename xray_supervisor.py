@@ -123,8 +123,8 @@ class Supervisor:
             except Exception as e:
                 try:
                     self._proc.kill()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("_spawn_xray: %s", exc)
                 self._proc = None
                 return False, f"stdin failed: {e}"
 
@@ -248,8 +248,8 @@ class Supervisor:
         finally:
             try:
                 conn.close()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("_serve: %s", exc)
 
     def run(self) -> None:
         srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -284,8 +284,8 @@ class Supervisor:
         finally:
             try:
                 srv.close()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("run: %s", exc)
             self._stop_xray()
             logger.info("supervisor exited")
 

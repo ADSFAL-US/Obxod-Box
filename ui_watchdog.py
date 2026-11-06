@@ -8,6 +8,11 @@ heartbeat'ом. Если отметок нет дольше порога — п�
 
 Пользователю предлагается два действия: перезапустить приложение или
 отменить (оставить как есть).
+
+Сон и гибернация не считаются зависанием: пока компьютер спит, UI-поток
+заморожен, и heartbeat'ов нет. Поэтому время простоя меряется часами,
+которые не тикают во сне (QueryUnbiasedInterruptTime), а пробуждение
+дополнительно детектируется по расхождению с обычными часами.
 """
 
 from __future__ import annotations
@@ -27,6 +32,50 @@ logger = logging.getLogger(__name__)
 HANG_THRESHOLD = 7.0
 CHECK_INTERVAL = 1.0
 REPEAT_AFTER = 60.0
+# Расхождение «обычных» часов и часов без сна, которое считаем пробуждением.
+# Оба источника тикают одинаково вне сна, поэтому порог можно держать низким.
+SUSPEND_GAP = 2.0
+# Насколько сам сторож должен «проспать», чтобы это считалось заморозкой
+# всего процесса (Modern Standby), а не нагрузкой на машину.
+PROCESS_FREEZE_GAP = 5.0
+
+
+def _make_clock() -> Callable[[], float]:
+    """Монотонные часы, не считающие время сна/гибернации.
+
+    time.monotonic() на Windows — это GetTickCount64(), он тикает и во сне.
+    После пробуждения разница с последним heartbeat'ом равна длительности сна,
+    и сторож решает, что UI завис на часы. QueryUnbiasedInterruptTime время сна
+    не считает, поэтому такой ложной тревоги не будет.
+    """
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            query = kernel32.QueryUnbiasedInterruptTime
+            query.argtypes = [ctypes.POINTER(ctypes.c_ulonglong)]
+            query.restype = ctypes.c_int
+
+            def _unbiased() -> float:
+                # Буфер создаётся на каждый вызов: clock зовут из UI-потока
+                # (beat) и из потока сторожа одновременно.
+                buf = ctypes.c_ulonglong(0)
+                try:
+                    if not query(ctypes.byref(buf)):
+                        raise OSError(
+                            ctypes.get_last_error(), "QueryUnbiasedInterruptTime"
+                        )
+                    return buf.value / 10_000_000.0
+                except Exception:
+                    # Сбой вызова не должен ронять heartbeat UI-потока.
+                    return time.monotonic()
+
+            _unbiased()  # проверяем, что вызов работает
+            return _unbiased
+        except Exception as e:
+            logger.debug("watchdog: часы без сна недоступны: %s", e)
+    return time.monotonic
 
 
 class UIWatchdog:
@@ -39,24 +88,29 @@ class UIWatchdog:
         self._app_dir = Path(app_dir)
         self._on_restart = on_restart
         self._threshold = threshold
-        self._last_beat = time.monotonic()
+        self._clock = _make_clock()
+        self._last_beat = self._clock()
+        self._last_wall = time.monotonic()
+        self._last_clock = self._last_beat
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._lock = threading.Lock()
         self._dialog_open = False
-        self._last_shown = 0.0
+        self._last_shown = float("-inf")
 
     # ------------------------------------------------------------------
     # API
     # ------------------------------------------------------------------
     def beat(self) -> None:
         """Отметка «UI жив». Вызывается из event loop'а (он на UI-потоке)."""
-        self._last_beat = time.monotonic()
+        self._last_beat = self._clock()
 
     def start(self) -> None:
         if self._thread is not None:
             return
-        self._last_beat = time.monotonic()
+        self._last_beat = self._clock()
+        self._last_wall = time.monotonic()
+        self._last_clock = self._last_beat
         self._thread = threading.Thread(
             target=self._run, name="ui-watchdog", daemon=True
         )
@@ -69,9 +123,45 @@ class UIWatchdog:
     # ------------------------------------------------------------------
     # Наблюдение
     # ------------------------------------------------------------------
+    def _resumed_from_sleep(self) -> bool:
+        """True, если между итерациями компьютер был в сне.
+
+        Обычные часы (time.monotonic) во сне тикают, часы без сна — нет.
+        Расхождение между ними и есть длительность сна.
+        """
+        wall = time.monotonic()
+        now = self._clock()
+        slept = (wall - self._last_wall) - (now - self._last_clock)
+        self._last_wall = wall
+        self._last_clock = now
+        if slept <= SUSPEND_GAP:
+            return False
+        logger.info("watchdog: пробуждение после сна (%.0f c) — сброс таймера", slept)
+        # UI-поток ещё не успел проснуться и дать heartbeat — даём ему шанс.
+        # max() — чтобы не откатить отметку, поставленную UI-потоком только что.
+        self._last_beat = max(self._last_beat, now)
+        return True
+
     def _run(self) -> None:
+        last_tick = self._clock()
         while not self._stop.wait(CHECK_INTERVAL):
-            idle = time.monotonic() - self._last_beat
+            now = self._clock()
+            # Сторож сам проспал больше своего интервала — заморожен весь
+            # процесс (Modern Standby, DAM), а не UI-поток. Это не зависание.
+            if now - last_tick > CHECK_INTERVAL + PROCESS_FREEZE_GAP:
+                logger.info(
+                    "watchdog: процесс был приостановлен (%.0f c) — сброс таймера",
+                    now - last_tick,
+                )
+                self._last_beat = max(self._last_beat, now)
+                self._last_wall = time.monotonic()
+                self._last_clock = now
+                last_tick = now
+                continue
+            last_tick = now
+            if self._resumed_from_sleep():
+                continue
+            idle = now - self._last_beat
             if idle < self._threshold:
                 continue
             with self._lock:
@@ -92,7 +182,9 @@ class UIWatchdog:
                 with self._lock:
                     self._dialog_open = False
                 # после закрытия диалога даём UI шанс ожить
-                self._last_beat = time.monotonic()
+                self._last_beat = max(self._last_beat, self._clock())
+                self._last_wall = time.monotonic()
+                self._last_clock = self._last_beat
 
     def _dump_stacks(self, idle: float) -> None:
         """Пишет стеки всех потоков — иначе зависание в логах не видно."""

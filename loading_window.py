@@ -10,6 +10,7 @@ from pathlib import Path
 
 import toga
 from toga.colors import rgb
+from toga.constants import WindowState
 from toga.style import Pack
 from toga.style.pack import COLUMN
 
@@ -35,6 +36,12 @@ logger = logging.getLogger(__name__)
 BG_COLOR = (45, 45, 45)
 BG_COLOR_CSS = "#2d2d2d"
 BG_COLOR_WEBVIEW = "FF2D2D2D"
+
+# Свёрнутое окно усыпляет WebView2: ExecuteScriptAsync в этом состоянии не
+# завершается, поэтому каждый вызов ограничиваем таймаутом.
+JS_TIMEOUT = 5.0
+# После стольких таймаутов подряд считаем мост мёртвым до восстановления окна.
+JS_MAX_FAILURES = 3
 
 
 def crop_svg(svg_text: str, crop: float = 50) -> str:
@@ -69,10 +76,17 @@ class LoadingWindow:
         self.app = app
         self.on_complete = on_complete
         self._window_shown = False
+        # Отдельный флаг от _window_shown: окно может быть уже показано, но
+        # свёрнуто или скрыто. Пока оно не видно, WebView2 не выполняет JS.
+        self._window_visible = False
         self._dom_check_started = False
         self._progress = 0
         self._status = ""
         self._loop: asyncio.AbstractEventLoop | None = None
+        # WebView2 может «залипнуть» на одном вызове (например, если окно
+        # свернули ровно в этот момент). После серии таймаутов перестаём
+        # дёргать JS до восстановления окна, иначе UI-поток встанет намертво.
+        self._js_failures = 0
 
         # Загружаем конфигурацию и применяем значения.
         self.app.config = Config()
@@ -85,6 +99,8 @@ class LoadingWindow:
             title="Loading",
             size=window_size,
             resizable=False,
+            on_show=self._on_window_show,
+            on_hide=self._on_window_hide,
         )
         # На GTK окно ещё не realized → get_window() is None → screen_position падает.
         self._center_window(self.window, window_size, app)
@@ -170,24 +186,54 @@ class LoadingWindow:
             # Используем asyncio.create_task вместо self.app.loop.create_task
             asyncio.create_task(self._wait_for_dom_and_show())
 
+    # ── Видимость окна ─────────────────────────────────────────────────
+    def _on_window_show(self, widget, **kwargs) -> None:
+        """Окно развернули/показали — досылаем накопленный прогресс."""
+        self._window_visible = True
+        # После восстановления окна даём мосту ещё один шанс.
+        self._js_failures = 0
+        if not self._window_shown:
+            return
+        loop = self._loop
+        if loop is None or not loop.is_running():
+            return
+        try:
+            loop.call_soon_threadsafe(
+                lambda: asyncio.ensure_future(self._refresh_ui())
+            )
+        except Exception as exc:
+            logger.debug("on_show refresh: %s", exc)
+
+    def _on_window_hide(self, widget, **kwargs) -> None:
+        """Окно свернули/скрыли — WebView2 перестаёт выполнять JS."""
+        self._window_visible = False
+
+    async def _refresh_ui(self) -> None:
+        await self._apply_progress()
+        await self._apply_status()
+
     async def _wait_for_dom_and_show(self, timeout: float = 5.0):
         self._loop = asyncio.get_running_loop()
         elapsed = 0.0
         step = 0.25
         while elapsed < timeout:
             try:
-                ready = await self.webview.evaluate_javascript(
-                    "document.body.dataset.svgReady === 'true'"
+                ready = await asyncio.wait_for(
+                    self.webview.evaluate_javascript(
+                        "document.body.dataset.svgReady === 'true'"
+                    ),
+                    JS_TIMEOUT,
                 )
                 if ready:
                     break
-            except (RuntimeError, ValueError) as exc:
+            except (RuntimeError, ValueError, asyncio.TimeoutError) as exc:
                 logger.debug("WebView DOM is not ready yet: %s", exc)
             await asyncio.sleep(step)
             elapsed += step
 
         if not self._window_shown:
             self._window_shown = True
+            self._window_visible = True
             self.window.show()
             await self._apply_progress()
             await self._apply_status()
@@ -196,6 +242,10 @@ class LoadingWindow:
 
     # ── Планирование JS-вызовов из любого потока ───────────────────────
     def _schedule_js(self, js: str) -> None:
+        if not self._window_visible:
+            # Свёрнутое окно усыпляет WebView2: вызовы копятся и не завершаются.
+            # Актуальное состояние дошлется при восстановлении окна.
+            return
         loop = self._loop
         if loop is None or not loop.is_running():
             return
@@ -207,18 +257,74 @@ class LoadingWindow:
             logger.debug("schedule_js failed: %s", exc)
 
     async def _eval_js(self, js: str) -> None:
+        if not self._webview_usable():
+            return
         try:
             # выражение с return — надёжнее на WebKitGTK, чем «голый» statement
             wrapped = "(function(){" + js + "; return true;})()"
-            await self.webview.evaluate_javascript(wrapped)
+            # ExecuteScriptAsync на свёрнутом/приостановленном WebView2 может
+            # не завершиться никогда — без таймаута это намертво вешает
+            # вызывающую корутину (и весь этап загрузки вместе с ней).
+            await asyncio.wait_for(
+                self.webview.evaluate_javascript(wrapped), JS_TIMEOUT
+            )
+            self._js_failures = 0
+        except asyncio.TimeoutError:
+            self._js_failures += 1
+            if self._js_failures >= JS_MAX_FAILURES:
+                logger.warning(
+                    "JS-мост загрузочного окна отключён после %d таймаутов",
+                    self._js_failures,
+                )
         except Exception as exc:
             logger.debug("JS eval failed: %s", exc)
+
+    def _webview_usable(self) -> bool:
+        """Можно ли сейчас безопасно дёргать WebView2.
+
+        ExecuteScriptAsync — синхронный COM-вызов в UI-потоке. Пока окно
+        свёрнуто, WebView2 приостановлен, и вызов блокирует UI-поток: окно
+        перестаёт отвечать и не разворачивается. Поэтому проверяем и наш
+        флаг, и живое состояние нативного окна (on_hide мог не сработать).
+        """
+        if not self._window_visible or self._js_failures >= JS_MAX_FAILURES:
+            return False
+        try:
+            if self.window.state == WindowState.MINIMIZED:
+                return False
+        except Exception as exc:
+            logger.debug("webview_usable: %s", exc)
+        return True
+
+    def _set_title(self, text: str) -> None:
+        """Меняет заголовок окна. Вызывать только из UI-потока."""
+        try:
+            self.window.title = text
+        except Exception as exc:
+            logger.debug("set_title: %s", exc)
+
+    def _schedule_title(self, text: str) -> None:
+        """Заголовок из любого потока — через event loop (он же UI-поток).
+
+        WinForms не переносит обращение к контролам из чужих потоков: в .NET
+        Core это либо исключение, либо блокирующий SendMessage, из-за которого
+        окно выглядит зависшим.
+        """
+        loop = self._loop
+        if loop is None or not loop.is_running():
+            # До старта цикла (инициализация окна) мы и так в UI-потоке.
+            self._set_title(text)
+            return
+        try:
+            loop.call_soon_threadsafe(self._set_title, text)
+        except Exception as exc:
+            logger.debug("schedule_title failed: %s", exc)
 
     # ── Публичное API для прогресса/статуса ────────────────────────────
     def set_progress(self, value: int) -> None:
         """Запоминает прогресс и обновляет индикатор (потокобезопасно)."""
         self._progress = max(0, min(100, int(value)))
-        if self._window_shown:
+        if self._window_visible:
             self._schedule_js(
                 f"if(window.setProgress) window.setProgress({self._progress})"
             )
@@ -227,11 +333,8 @@ class LoadingWindow:
         """Обновляет подпись под прогресс-баром (потокобезопасно)."""
         self._status = text or ""
         # WebKitGTK иногда не применяет DOM-подпись — дублируем в title окна
-        try:
-            self.window.title = (self._status[:80] if self._status else "Loading")
-        except Exception as exc:
-            logger.debug("set_status: %s", exc)
-        if self._window_shown:
+        self._schedule_title(self._status[:80] if self._status else "Loading")
+        if self._window_visible:
             self._schedule_js(
                 "if(window.setStatus) window.setStatus("
                 + json.dumps(self._status, ensure_ascii=False) + ")"
@@ -391,7 +494,7 @@ class LoadingWindow:
             await self._apply_status()
             return
 
-        self.set_status(f"Устанавливаю .NET Desktop Runtime {major}...")
+        self.set_status(f"Скачиваю .NET Desktop Runtime {major}...")
         await self._apply_status()
 
         def status_cb(text: str) -> None:

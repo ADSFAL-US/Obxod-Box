@@ -34,8 +34,38 @@ DOWNLOAD_URL_TEMPLATE = (
     "https://aka.ms/dotnet/{major}.0/windowsdesktop-runtime-win-{arch}.exe"
 )
 INSTALL_TIMEOUT = 15 * 60
-# Флаг «этот запуск уже перезапускался ради .NET» — защита от цикла.
-_RESTARTED_ENV = "OBXOD_DOTNET_RESTARTED"
+DOWNLOAD_TIMEOUT = 10 * 60
+DOWNLOAD_SOCKET_TIMEOUT = 30
+DOWNLOAD_ATTEMPTS = 3
+DIALOG_TIMEOUT = 5 * 60
+# Сколько каталог рантайма должен продержаться, чтобы считать установку
+# завершённой, когда процесс установщика не удалось отследить.
+RUNTIME_STABLE_SECONDS = 20.0
+USER_AGENT = "Obxod-BOX dotnet-bootstrap"
+
+# Toga грузит именно Windows Desktop Runtime. Базовый Microsoft.NETCore.App
+# (его ставят другие приложения) для WinForms недостаточен: hostfxr не найдёт
+# Microsoft.WindowsDesktop.App и Toga молча откатится на .NET Framework.
+DESKTOP_FRAMEWORK = "Microsoft.WindowsDesktop.App"
+# Только для диагностики в логе — не признак установленного Desktop Runtime.
+CORE_FRAMEWORK = "Microsoft.NETCore.App"
+
+# Коды установщика, означающие успех: 0 — ок, 3010 — ок, но нужен ребут,
+# 1638 — эта или более новая версия уже установлена.
+INSTALL_EXIT_OK = frozenset({0, 3010, 1638})
+INSTALL_EXIT_HINTS = {
+    1602: "установка отменена пользователем",
+    1603: "фатальная ошибка установщика",
+    1618: "другая установка уже идёт",
+    1633: "платформа не поддерживается",
+    1635: "повреждённый пакет",
+    1638: "другая версия уже установлена",
+    3010: "требуется перезагрузка",
+}
+
+# Счётчик перезапусков ради .NET — защита от цикла, но не запрет навсегда.
+_RESTARTS_ENV = "OBXOD_DOTNET_RESTARTS"
+MAX_RESTARTS = 2
 
 
 def _runtime_json_major() -> int | None:
@@ -96,34 +126,38 @@ def _candidate_roots() -> list[Path]:
     return unique
 
 
-def _versions_in_root(root: Path, major: int) -> list[str]:
+def _versions_in_root(
+    root: Path, major: int, framework: str = DESKTOP_FRAMEWORK
+) -> list[str]:
     prefix = f"{major}."
     versions: set[str] = set()
-    for name in ("Microsoft.WindowsDesktop.App", "Microsoft.NETCore.App"):
-        directory = root / "shared" / name
-        try:
-            for entry in directory.iterdir():
-                if entry.is_dir() and entry.name.startswith(prefix):
-                    versions.add(entry.name)
-        except OSError:
-            continue
+    directory = root / "shared" / framework
+    try:
+        for entry in directory.iterdir():
+            if entry.is_dir() and entry.name.startswith(prefix):
+                versions.add(entry.name)
+    except OSError:
+        pass
     return sorted(versions, reverse=True)
 
 
-def _registry_versions() -> set[str]:
+def _registry_versions(framework: str = DESKTOP_FRAMEWORK) -> set[str]:
+    """Версии framework'а из реестра.
+
+    Установщик .NET пишет sharedfx в WOW6432Node-ветку, поэтому читаем оба
+    представления: 64-битный процесс иначе не увидит ни одной версии.
+    """
     versions: set[str] = set()
     if sys.platform != "win32":
         return versions
     try:
         import winreg
 
-        root = r"SOFTWARE\dotnet\Setup\InstalledVersions"
-        for arch in ("x64", "arm64", "x86"):
-            for fx in ("Microsoft.WindowsDesktop.App", "Microsoft.NETCore.App"):
+        for hive in (r"SOFTWARE\dotnet", r"SOFTWARE\WOW6432Node\dotnet"):
+            for arch in ("x64", "arm64", "x86"):
+                path = rf"{hive}\Setup\InstalledVersions\{arch}\sharedfx\{framework}"
                 try:
-                    key = winreg.OpenKey(
-                        winreg.HKEY_LOCAL_MACHINE, rf"{root}\{arch}\sharedfx\{fx}"
-                    )
+                    key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, path)
                 except OSError:
                     continue
                 with key:
@@ -134,7 +168,7 @@ def _registry_versions() -> set[str]:
                         except OSError:
                             break
                         index += 1
-                        versions.add(name.strip("v"))
+                        versions.add(name.lstrip("v"))
     except Exception as e:
         logger.debug("dotnet: реестр недоступен: %s", e)
     return versions
@@ -155,11 +189,25 @@ def installed_versions(major: int | None = None) -> list[str]:
     return sorted(versions, reverse=True)
 
 
+def core_versions(major: int | None = None) -> list[str]:
+    """Версии базового Microsoft.NETCore.App — только для диагностики."""
+    major = required_major() if major is None else major
+    versions: set[str] = set()
+    for root in _candidate_roots():
+        versions.update(_versions_in_root(root, major, CORE_FRAMEWORK))
+    for version in _registry_versions(CORE_FRAMEWORK):
+        if version.startswith(f"{major}."):
+            versions.add(version)
+    return sorted(versions, reverse=True)
+
+
 def usable_root(major: int | None = None) -> Path | None:
     """Корень .NET, из которого реально загрузится нужный runtime.
 
     clr_loader/hostfxr ищет рантайм в DOTNET_ROOT, поэтому установленный
     в «Program Files» .NET может быть не виден при чужом DOTNET_ROOT.
+    Проверяем именно Windows Desktop Runtime: одного Microsoft.NETCore.App
+    недостаточно, Toga на нём не запустится.
     """
     major = required_major() if major is None else major
     for root in _candidate_roots():
@@ -250,6 +298,7 @@ def _notify(progress_cb: Callable[[int, int], None] | None, done: int, total: in
 
 
 def _download(progress_cb: Callable[[int, int], None] | None) -> Path:
+    """Скачивает установщик с таймаутами, ретраями и проверкой PE-заголовка."""
     major = required_major()
     url = DOWNLOAD_URL_TEMPLATE.format(major=major, arch=_arch_tag())
     logger.info("dotnet: скачиваю Windows Desktop Runtime %s (%s)", major, url)
@@ -258,30 +307,127 @@ def _download(progress_cb: Callable[[int, int], None] | None) -> Path:
     os.close(fd)
     target = Path(tmp_name)
 
-    def hook(block_num: int, block_size: int, total_size: int) -> None:
-        _notify(progress_cb, block_num * block_size, total_size)
+    last_error: Exception | None = None
+    for attempt in range(1, DOWNLOAD_ATTEMPTS + 1):
+        try:
+            _download_once(url, target, progress_cb)
+            logger.info("dotnet: установщик скачан (%d байт)", target.stat().st_size)
+            return target
+        except Exception as e:
+            last_error = e
+            logger.warning(
+                "dotnet: попытка %d/%d скачать установщик не удалась: %s",
+                attempt, DOWNLOAD_ATTEMPTS, e,
+            )
+            if attempt < DOWNLOAD_ATTEMPTS:
+                time.sleep(2.0 * attempt)
 
-    urllib.request.urlretrieve(url, target, reporthook=hook)
-    logger.info("dotnet: установщик скачан (%d байт)", target.stat().st_size)
-    return target
+    try:
+        target.unlink()
+    except OSError:
+        pass
+    raise RuntimeError(f"не удалось скачать установщик .NET: {last_error}")
+
+
+def _download_once(
+    url: str,
+    target: Path,
+    progress_cb: Callable[[int, int], None] | None,
+) -> None:
+    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    deadline = time.monotonic() + DOWNLOAD_TIMEOUT
+    done = 0
+
+    with urllib.request.urlopen(
+        request, timeout=DOWNLOAD_SOCKET_TIMEOUT
+    ) as response, target.open("wb") as out:
+        total = int(response.headers.get("Content-Length") or 0)
+        _notify(progress_cb, 0, total)
+        while True:
+            if time.monotonic() > deadline:
+                raise TimeoutError(f"скачивание не уложилось в {DOWNLOAD_TIMEOUT} c")
+            chunk = response.read(256 * 1024)
+            if not chunk:
+                break
+            out.write(chunk)
+            done += len(chunk)
+            _notify(progress_cb, done, total)
+
+    size = target.stat().st_size
+    if total and size != total:
+        raise IOError(f"недокачано: {size} из {total} байт")
+    if size < 1024 * 1024:
+        raise IOError(f"подозрительно маленький файл: {size} байт")
+    with target.open("rb") as fh:
+        if fh.read(2) != b"MZ":
+            raise IOError("скачанный файл не является исполняемым (MZ)")
+
+
+def _installer_exit_code(code: int) -> bool:
+    if code in INSTALL_EXIT_OK:
+        if code == 3010:
+            logger.info("dotnet: установка завершена, требуется перезагрузка")
+        elif code == 1638:
+            logger.info("dotnet: эта или более новая версия уже установлена")
+        return True
+    hint = INSTALL_EXIT_HINTS.get(code, "неизвестная ошибка")
+    logger.warning("dotnet: установщик вернул %d (%s)", code, hint)
+    return False
 
 
 def _run_installer(installer: Path) -> bool:
-    """Тихая установка с повышением прав. True — установщик отработал успешно."""
+    """Тихая установка. True — установщик отработал успешно.
+
+    Ждём именно завершения процесса установщика: каталог
+    shared\\Microsoft.WindowsDesktop.App\\10.0.x появляется в начале установки,
+    и проверка по нему давала ложный успех, после которого приложение
+    перезапускалось прямо посреди записи файлов.
+    """
     if sys.platform != "win32":
         return False
 
-    args = (
-        f'"{installer}" /install /quiet /norestart'
-    )
+    args = [str(installer), "/install", "/quiet", "/norestart"]
+    try:
+        import ctypes
+
+        elevated = bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception:
+        elevated = False
+
+    if elevated:
+        try:
+            completed = subprocess.run(
+                args,
+                timeout=INSTALL_TIMEOUT,
+                check=False,
+                close_fds=True,
+            )
+        except subprocess.TimeoutExpired:
+            logger.warning("dotnet: установщик не завершился за %d c", INSTALL_TIMEOUT)
+            return False
+        except Exception as e:
+            logger.warning("dotnet: не удалось запустить установщик: %s", e)
+            return False
+        return _installer_exit_code(completed.returncode)
+
+    return _run_installer_elevated(args)
+
+
+def _run_installer_elevated(args: list[str]) -> bool:
+    """Запуск через UAC, когда процесс не elevated.
+
+    ShellExecuteW не отдаёт PID, поэтому ждём завершения по исчезновению
+    процесса установщика, а не по появлению каталога рантайма.
+    """
     try:
         import ctypes
 
         shell32 = ctypes.windll.shell32
         shell32.ShellExecuteW.restype = ctypes.c_void_p
-        # "runas" — единственный способ получить UAC из неуправляемого процесса.
-        # Возвращаемое значение > 32 означает, что процесс запущен.
-        handle = shell32.ShellExecuteW(None, "runas", "cmd.exe", f"/c {args}", None, 0)
+        params = " ".join(f'"{a}"' if " " in a else a for a in args[1:])
+        handle = shell32.ShellExecuteW(
+            None, "runas", args[0], params, None, 0
+        )
     except Exception as e:
         logger.warning("dotnet: не удалось запустить установщик: %s", e)
         return False
@@ -290,17 +436,60 @@ def _run_installer(installer: Path) -> bool:
         logger.warning("dotnet: ShellExecuteW вернул %s (UAC отклонён?)", handle)
         return False
 
-    # Ждём завершения по появлению нужной версии в файловой системе: своего
-    # PID ShellExecuteW не отдаёт, а гонять внешние утилиты ради этого не нужно.
+    if not _wait_for_installer_exit(Path(args[0])):
+        return False
+    return bool(installed_versions(required_major()))
+
+
+def _wait_for_installer_exit(installer: Path) -> bool:
+    """Ждёт, пока процесс установщика появится и завершится."""
+    name = installer.name
     major = required_major()
     deadline = time.monotonic() + INSTALL_TIMEOUT
-    while time.monotonic() < deadline:
-        if installed_versions(major):
-            return True
-        time.sleep(2.0)
+    seen = False
+    runtime_since: float | None = None
 
-    logger.warning("dotnet: установка не завершилась за %d c", INSTALL_TIMEOUT)
+    while time.monotonic() < deadline:
+        if _installer_running(name):
+            seen = True
+            runtime_since = None
+        elif seen:
+            logger.info("dotnet: установщик завершился")
+            return True
+        elif installed_versions(major):
+            # Процесс мог отработать между опросами или называться иначе.
+            # Каталог рантайма появляется в начале установки, поэтому ждём,
+            # пока он продержится: иначе перезапустимся посреди записи файлов.
+            now = time.monotonic()
+            if runtime_since is None:
+                runtime_since = now
+            elif now - runtime_since >= RUNTIME_STABLE_SECONDS:
+                logger.info("dotnet: установщик завершился (runtime стабилен)")
+                return True
+        else:
+            runtime_since = None
+        time.sleep(1.0)
+
+    logger.warning("dotnet: установщик не завершился за %d c", INSTALL_TIMEOUT)
     return False
+
+
+def _installer_running(name: str) -> bool:
+    if sys.platform != "win32":
+        return False
+    try:
+        output = subprocess.run(
+            ["tasklist", "/FI", f"IMAGENAME eq {name}", "/NH"],
+            capture_output=True,
+            timeout=15,
+            check=False,
+        ).stdout
+    except Exception as e:
+        logger.debug("dotnet: tasklist недоступен: %s", e)
+        return False
+    # tasklist пишет в OEM-кодировке, поэтому декодируем байты сами.
+    text = output.decode("cp866", errors="replace") if isinstance(output, bytes) else output
+    return name.lower() in text.lower()
 
 
 def _ask_user(major: int) -> bool:
@@ -324,10 +513,24 @@ def _ask_user(major: int) -> bool:
     done = threading.Event()
 
     def ui() -> None:
+        owner = None
         try:
+            import System.Drawing as Drawing  # type: ignore
             import System.Windows.Forms as WinForms  # type: ignore
 
+            # Невидимый owner держит диалог поверх loading-окна: без него
+            # MessageBox легко уходит за него и выглядит как зависание.
+            owner = WinForms.Form()
+            owner.TopMost = True
+            owner.ShowInTaskbar = False
+            owner.FormBorderStyle = getattr(WinForms.FormBorderStyle, "None")
+            owner.Size = Drawing.Size(1, 1)
+            owner.StartPosition = WinForms.FormStartPosition.Manual
+            owner.Location = Drawing.Point(-32000, -32000)
+            owner.Show()
+
             result = WinForms.MessageBox.Show(
+                owner,
                 "Для корректной работы интерфейса нужен "
                 f".NET Desktop Runtime {major}.\n\n"
                 "Он не установлен. Установить сейчас?\n"
@@ -341,13 +544,21 @@ def _ask_user(major: int) -> bool:
         except Exception as e:
             logger.warning("dotnet: диалог не показан: %s", e)
         finally:
+            if owner is not None:
+                try:
+                    owner.Close()
+                    owner.Dispose()
+                except Exception as exc:
+                    logger.debug("dotnet: owner не закрылся: %s", exc)
             done.set()
 
     thread = NetThread(ThreadStart(ui))
     thread.SetApartmentState(ApartmentState.STA)
     thread.IsBackground = True
     thread.Start()
-    done.wait()
+    if not done.wait(DIALOG_TIMEOUT):
+        logger.warning("dotnet: пользователь не ответил на диалог за %d c", DIALOG_TIMEOUT)
+        return False
     return answer["yes"]
 
 
@@ -378,6 +589,14 @@ def ensure_runtime(
     if versions:
         logger.info("dotnet: Windows Desktop Runtime %s уже установлен (%s)", major, versions[0])
         return True
+
+    core = core_versions(major)
+    if core:
+        logger.info(
+            "dotnet: найден только Microsoft.NETCore.App %s без Windows Desktop Runtime — "
+            "для WinForms этого недостаточно",
+            core[0],
+        )
 
     logger.info("dotnet: Windows Desktop Runtime %s не найден — устанавливаю", major)
 
@@ -437,14 +656,23 @@ def restart_required() -> bool:
     """
     if sys.platform != "win32":
         return False
-    # Защита от цикла: после перезапуска принимаем
-    # текущий рантайм как есть, чтобы не зациклиться.
-    if os.environ.get(_RESTARTED_ENV) == "1":
+    # Защита от цикла: после MAX_RESTARTS перезапусков принимаем текущий
+    # рантайм как есть. Счётчик, а не флаг: если после перезапуска рантайм
+    # так и не подхватился, следующая попытка (например, после установки
+    # вручную) всё ещё возможна.
+    if _restart_count() >= MAX_RESTARTS:
         return False
     # Если toga_winforms ещё не импортирован, смысла нет.
     if "toga_winforms" not in sys.modules:
         return False
     return not using_dotnet_core() and is_installed()
+
+
+def _restart_count() -> int:
+    try:
+        return int(os.environ.get(_RESTARTS_ENV, "0"))
+    except ValueError:
+        return 0
 
 
 def restart_app() -> bool:
@@ -463,7 +691,7 @@ def restart_app() -> bool:
         )
 
     env = os.environ.copy()
-    env[_RESTARTED_ENV] = "1"
+    env[_RESTARTS_ENV] = str(_restart_count() + 1)
 
     try:
         subprocess.Popen(
@@ -477,5 +705,20 @@ def restart_app() -> bool:
         logger.warning("dotnet: не удалось перезапустить: %s", e)
         return False
 
-    logger.info("dotnet: перезапуск ради .NET Core")
+    logger.info("dotnet: перезапуск ради .NET Core (попытка %d)", _restart_count() + 1)
+    _exit_now()
+
+
+def _exit_now() -> None:
+    """Завершает процесс, не теряя логи и не оставляя мьютекс занятым."""
+    try:
+        logging.shutdown()
+    except Exception:
+        pass
+    try:
+        import single_instance
+
+        single_instance.release()
+    except Exception as exc:
+        logger.debug("dotnet: release мьютекса не удался: %s", exc)
     os._exit(0)

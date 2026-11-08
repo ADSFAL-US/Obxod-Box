@@ -1144,6 +1144,204 @@
     </div>
   </div>
 
+  <!-- ══════════════ Онбординг первого запуска ══════════════
+       Куб не дублируется: используется тот же #cube-root, который
+       переезжает в правую половину через body.onboarding. -->
+  <div class="ob-root" id="obRoot" aria-hidden="true">
+    <div class="ob-pane ob-text">
+      <div class="ob-brand">
+        <span class="ob-brand-mark"></span>
+        <span class="ob-brand-name">Obxod-BOX</span>
+      </div>
+
+      <div class="ob-slides" id="obSlides">
+
+        <section class="ob-slide" data-slide="0">
+          <div class="ob-slide-inner">
+            <div class="ob-eyebrow">Знакомство</div>
+            <h1>Это Обходик</h1>
+            <p class="ob-lead">
+              Главная кнопка приложения. Нажмите на него — трафик пойдёт через
+              выбранный конфиг. Нажмите ещё раз — отключение.
+            </p>
+            <ul class="ob-chips">
+              <li><b>клик</b> — подключиться</li>
+              <li><b>клик ещё раз</b> — отключиться</li>
+            </ul>
+            <p class="ob-note">
+              Цвет рамки и глаз подскажет состояние: серый — выключено,
+              жёлтый — подключается, зелёный — работает.
+            </p>
+          </div>
+        </section>
+
+        <section class="ob-slide" data-slide="1">
+          <div class="ob-slide-inner">
+            <div class="ob-eyebrow">Провайдеры и конфиги</div>
+            <h1>Два селектора — вся навигация</h1>
+            <p class="ob-lead">
+              <b>Провайдер</b> — источник конфигов, обычно это ваша подписка.
+              <b>Конфиг</b> — конкретный сервер внутри неё.
+            </p>
+            <ul class="ob-bullets">
+              <li>
+                <span class="ob-bullet-dot"></span>
+                Несколько провайдеров? Переключайтесь на ходу — ядро
+                перезапустится само.
+              </li>
+              <li>
+                <span class="ob-bullet-dot"></span>
+                Внутри провайдера десятки конфигов — выбирайте по пингу
+                и протоколу.
+              </li>
+            </ul>
+            <p class="ob-note">
+              Выбор запоминается: при следующем запуске всё будет как вы оставили.
+            </p>
+          </div>
+        </section>
+
+        <section class="ob-slide" data-slide="2">
+          <div class="ob-slide-inner">
+            <div class="ob-eyebrow">Кнопки</div>
+            <h1>Три кнопки вокруг</h1>
+            <p class="ob-lead">
+              Всё, что нужно для обслуживания подписки — рядом с кубом.
+            </p>
+            <ul class="ob-actions">
+              <li>
+                <span class="ob-action-icon">+</span>
+                <span class="ob-action-text">
+                  <b>Добавить провайдера</b>
+                  <small>импорт по ссылке подписки</small>
+                </span>
+              </li>
+              <li>
+                <span class="ob-action-icon">⟳</span>
+                <span class="ob-action-text">
+                  <b>Обновить подписку</b>
+                  <small>подтянуть свежие конфиги</small>
+                </span>
+              </li>
+              <li>
+                <span class="ob-action-icon">⚡</span>
+                <span class="ob-action-text">
+                  <b>Пропинговать</b>
+                  <small>замерить задержку всех конфигов</small>
+                </span>
+              </li>
+            </ul>
+          </div>
+        </section>
+
+        <section class="ob-slide" data-slide="3">
+          <div class="ob-slide-inner">
+            <div class="ob-eyebrow">С чего начать</div>
+            <h1>Выберите свой вариант</h1>
+            <p class="ob-lead">
+              Можно начать без подписки — подключите её позже.
+            </p>
+
+            <div class="ob-options" id="obOptions">
+              <button class="ob-option" data-option="none" type="button">
+                <span class="ob-option-radio"></span>
+                <span class="ob-option-body">
+                  <span class="ob-option-title">
+                    Пока без VPN
+                    <span class="ob-badge">скоро</span>
+                  </span>
+                  <span class="ob-option-desc">
+                    Клиент запустится, но подключаться будет некуда.
+                    Скоро здесь появится фрагментирование пакетов.
+                  </span>
+                </span>
+              </button>
+
+              <button class="ob-option" data-option="avava" type="button">
+                <span class="ob-option-radio"></span>
+                <span class="ob-option-body">
+                  <span class="ob-option-title">
+                    Подключить AVAVA VPN
+                    <span class="ob-badge ob-badge-accent">скоро</span>
+                  </span>
+                  <span class="ob-option-desc">
+                    Наш собственный сервис. Один клик — и всё готово.
+                  </span>
+                </span>
+              </button>
+
+              <button class="ob-option" data-option="third" type="button">
+                <span class="ob-option-radio"></span>
+                <span class="ob-option-body">
+                  <span class="ob-option-title">Сторонний провайдер</span>
+                  <span class="ob-option-desc">
+                    Импортируйте ссылку подписки от любого сервиса.
+                  </span>
+                </span>
+              </button>
+            </div>
+
+            <div class="ob-import" id="obImport">
+              <input type="text" id="obImportUrl" placeholder="https://.../sub/ваш-ключ"
+                     spellcheck="false" autocomplete="off">
+              <button type="button" id="obImportBtn">Импортировать</button>
+            </div>
+            <div class="ob-import-status" id="obImportStatus"></div>
+          </div>
+        </section>
+
+      </div>
+    </div>
+
+    <div class="ob-pane ob-visual">
+      <div class="ob-stage" id="obStage">
+        <div class="ob-layer" data-layer="0">
+          <div class="ob-bubble">Привет, я Обходик 👋</div>
+          <div class="ob-tap-hint">нажми на меня</div>
+        </div>
+
+        <div class="ob-layer" data-layer="1">
+          <div class="ob-mini ob-mini-provider" id="obMiniProvider">
+            <div class="ob-mini-label">Провайдер</div>
+            <div class="ob-mini-value">avava-vpn</div>
+            <div class="ob-mini-tags"><span class="ob-mini-tag count">12</span></div>
+          </div>
+          <div class="ob-mini ob-mini-config" id="obMiniConfig">
+            <div class="ob-mini-label">Конфиг</div>
+            <div class="ob-mini-value">🇳🇱 Амстердам</div>
+            <div class="ob-mini-tags">
+              <span class="ob-mini-tag">vless</span>
+              <span class="ob-mini-tag reality">reality</span>
+              <span class="ob-mini-tag good">42 ms</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="ob-layer" data-layer="2">
+          <div class="ob-orbit">
+            <div class="ob-orbit-btn" id="obOrbitAdd" title="Добавить провайдера">+</div>
+            <div class="ob-orbit-btn" id="obOrbitRefresh" title="Обновить подписку">⟳</div>
+            <div class="ob-orbit-btn" id="obOrbitPing" title="Пропинговать">⚡</div>
+          </div>
+        </div>
+
+        <div class="ob-layer" data-layer="3">
+          <div class="ob-halo"></div>
+        </div>
+
+        <div class="ob-tap-ring" id="obTapRing"><span></span><span></span><span></span></div>
+      </div>
+    </div>
+
+    <footer class="ob-nav">
+      <button class="ob-back" id="obBack" type="button"
+              title="Назад (Esc / Backspace)" aria-label="Назад">←</button>
+      <div class="ob-dots" id="obDots"></div>
+      <button class="ob-next" id="obNext" type="button"
+              title="Дальше (Enter)" aria-label="Дальше">→</button>
+    </footer>
+  </div>
+
   <script>
     // Куб: assets/cube/* (инжектит Python). Здесь — остальной UI shell.
 

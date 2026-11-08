@@ -1,0 +1,785 @@
+/* ══════════════════════════════════════════════════════════════════
+   Онбординг первого запуска.
+
+   Куб НЕ дублируется: используется тот же .face-area из assets/cube/,
+   он просто переезжает в правую половину окна. Поэтому пропорции,
+   цвета и акценты — ровно клиентские.
+
+   Подключается после main_ui.html, поэтому переопределяет его правила.
+   ══════════════════════════════════════════════════════════════════ */
+
+:root {
+  --ob-ease: cubic-bezier(0.4, 0, 0.2, 1);
+  --ob-accent: #6c5ce7;
+  --ob-accent-soft: rgba(108, 92, 231, 0.16);
+  --ob-card: #3a3a3a;
+  --ob-card-hover: #454545;
+  --ob-line: #4a4a4a;
+  --ob-text: #ffffff;
+  --ob-text-dim: #a8a8a8;
+  --ob-text-faint: #7a7a7a;
+
+  /* размеры куба — те же, что в assets/cube/cube.css */
+  --ob-cube-face: clamp(120px, 24vw, 240px);
+  --ob-cube-pad: clamp(14px, 2.5vw, 24px);
+  --ob-cube-total: calc(var(--ob-cube-face) + 2 * var(--ob-cube-pad));
+}
+
+/* ── Каркас оверлея ─────────────────────────────────────────────── */
+
+.ob-root {
+  position: fixed;
+  inset: 0;
+  z-index: 130;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 0.32s var(--ob-ease), visibility 0.32s;
+}
+body.onboarding .ob-root,
+body.onboarding-leaving .ob-root {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
+body.onboarding-leaving .ob-root {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.ob-pane { position: relative; overflow: hidden; }
+
+.ob-text {
+  display: flex;
+  flex-direction: column;
+  padding: clamp(24px, 4vh, 44px) clamp(24px, 4vw, 56px) 96px;
+  pointer-events: auto;
+}
+
+.ob-visual { pointer-events: none; }
+
+/* Точка привязки декораций — центр куба.
+   Куб позиционируется от окна (left: 75%), а .ob-visual занимает правую
+   половину, поэтому внутри панели это 50%. */
+.ob-stage {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 0;
+  height: 0;
+}
+
+.ob-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: clamp(20px, 5vh, 56px);
+  opacity: 0.85;
+}
+.ob-brand-mark {
+  width: 22px; height: 22px;
+  border-radius: 7px;
+  border: 2.5px solid var(--ob-accent);
+  box-shadow: 0 0 14px rgba(108, 92, 231, 0.45);
+}
+.ob-brand-name {
+  font-size: 13px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ob-text-dim);
+  font-weight: 600;
+}
+
+/* ── Слайды ─────────────────────────────────────────────────────── */
+
+.ob-slides {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+
+.ob-slide {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  opacity: 0;
+  transform: translateY(14px);
+  pointer-events: none;
+  transition: opacity 0.34s var(--ob-ease), transform 0.34s var(--ob-ease);
+}
+.ob-slide.active {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+.ob-slide.leaving {
+  opacity: 0;
+  transform: translateY(-14px);
+}
+
+.ob-slide-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 8px;
+  padding-bottom: 4px;
+  scroll-padding-bottom: 8px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--ob-line) transparent;
+}
+.ob-slide-inner::-webkit-scrollbar { width: 6px; }
+.ob-slide-inner::-webkit-scrollbar-thumb {
+  background: var(--ob-line);
+  border-radius: 3px;
+}
+.ob-slide-inner::-webkit-scrollbar-track { background: transparent; }
+
+.ob-eyebrow {
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ob-accent);
+  font-weight: 700;
+}
+
+.ob-slide h1 {
+  margin: 0;
+  font-size: clamp(24px, 3.2vw, 38px);
+  line-height: 1.12;
+  letter-spacing: -0.02em;
+  font-weight: 700;
+  color: var(--ob-text);
+}
+
+.ob-lead {
+  margin: 0;
+  font-size: clamp(13px, 1.15vw, 15.5px);
+  line-height: 1.6;
+  color: var(--ob-text-dim);
+  max-width: 46ch;
+}
+.ob-lead b { color: var(--ob-text); font-weight: 600; }
+
+.ob-note {
+  margin: 4px 0 0;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--ob-text-faint);
+  max-width: 46ch;
+  padding-left: 12px;
+  border-left: 2px solid var(--ob-line);
+}
+
+.ob-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.ob-chips li {
+  font-size: 12.5px;
+  color: var(--ob-text-dim);
+  background: var(--ob-card);
+  border: 1px solid var(--ob-line);
+  border-radius: 999px;
+  padding: 6px 12px;
+}
+.ob-chips b { color: var(--ob-text); font-weight: 600; }
+
+.ob-bullets {
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.ob-bullets li {
+  display: flex;
+  gap: 10px;
+  font-size: clamp(12.5px, 1.05vw, 14.5px);
+  line-height: 1.55;
+  color: var(--ob-text-dim);
+}
+.ob-bullet-dot {
+  flex: 0 0 auto;
+  width: 6px; height: 6px;
+  margin-top: 8px;
+  border-radius: 50%;
+  background: var(--ob-accent);
+  box-shadow: 0 0 8px rgba(108, 92, 231, 0.7);
+}
+
+.ob-actions {
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ob-actions li {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--ob-card);
+  border: 1px solid transparent;
+  transition: border-color 0.2s var(--ob-ease), background 0.2s var(--ob-ease);
+}
+.ob-actions li:hover { background: var(--ob-card-hover); border-color: var(--ob-line); }
+.ob-action-icon {
+  flex: 0 0 auto;
+  width: 30px; height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  background: var(--ob-accent-soft);
+  color: #a79bff;
+  font-size: 15px;
+  font-weight: 700;
+}
+.ob-action-text { display: flex; flex-direction: column; gap: 1px; }
+.ob-action-text b { font-size: 13.5px; font-weight: 600; color: var(--ob-text); }
+.ob-action-text small { font-size: 11.5px; color: var(--ob-text-faint); }
+
+/* ── Варианты старта ────────────────────────────────────────────── */
+
+.ob-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.ob-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  width: 100%;
+  text-align: left;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: var(--ob-card);
+  border: 1px solid transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  transition: background 0.2s var(--ob-ease), border-color 0.2s var(--ob-ease), transform 0.15s var(--ob-ease);
+}
+.ob-option:hover { background: var(--ob-card-hover); }
+.ob-option:active { transform: scale(0.99); }
+.ob-option.selected {
+  border-color: var(--ob-accent);
+  background: var(--ob-accent-soft);
+}
+
+.ob-option-radio {
+  flex: 0 0 auto;
+  width: 16px; height: 16px;
+  margin-top: 2px;
+  border-radius: 50%;
+  border: 2px solid var(--ob-line);
+  transition: border-color 0.2s var(--ob-ease), box-shadow 0.2s var(--ob-ease);
+}
+.ob-option.selected .ob-option-radio {
+  border-color: var(--ob-accent);
+  box-shadow: inset 0 0 0 3px #2d2d2d, 0 0 0 1px var(--ob-accent);
+  background: var(--ob-accent);
+}
+
+.ob-option-body { display: flex; flex-direction: column; gap: 3px; }
+.ob-option-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--ob-text);
+}
+.ob-option-desc {
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--ob-text-faint);
+}
+
+.ob-badge {
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: 5px;
+  background: var(--ob-line);
+  color: var(--ob-text-dim);
+}
+.ob-badge-accent { background: var(--ob-accent-soft); color: #a79bff; }
+
+.ob-import {
+  display: flex;
+  gap: 8px;
+  margin-top: 2px;
+  max-height: 0;
+  opacity: 0;
+  overflow: hidden;
+  flex: 0 0 auto;
+  transition: max-height 0.3s var(--ob-ease), opacity 0.25s var(--ob-ease), margin 0.3s var(--ob-ease);
+}
+.ob-import.visible {
+  max-height: 60px;
+  opacity: 1;
+  margin-top: 8px;
+}
+.ob-import input {
+  flex: 1;
+  min-width: 0;
+  padding: 9px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--ob-line);
+  background: #333333;
+  color: var(--ob-text);
+  font: inherit;
+  font-size: 12.5px;
+  outline: none;
+  transition: border-color 0.2s var(--ob-ease);
+}
+.ob-import input::placeholder { color: var(--ob-text-faint); }
+.ob-import input:focus { border-color: var(--ob-accent); }
+.ob-import button {
+  flex: 0 0 auto;
+  padding: 0 14px;
+  border-radius: 10px;
+  border: none;
+  background: var(--ob-accent);
+  color: #fff;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: filter 0.2s var(--ob-ease), opacity 0.2s var(--ob-ease);
+}
+.ob-import button:hover { filter: brightness(1.12); }
+.ob-import button:disabled { opacity: 0.5; cursor: default; filter: none; }
+
+.ob-import-status {
+  margin-top: 6px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--ob-text-faint);
+  min-height: 0;
+}
+.ob-import-status.error { color: #ef4444; }
+.ob-import-status.ok { color: #4ade80; }
+
+/* ── Декор правой половины ──────────────────────────────────────── */
+
+.ob-bubble {
+  position: absolute;
+  left: 0;
+  top: calc(var(--ob-cube-total) / -2 - 62px);
+  transform: translateX(-50%) translateY(6px) scale(0.96);
+  padding: 9px 14px;
+  border-radius: 14px 14px 14px 4px;
+  background: var(--ob-card);
+  border: 1px solid var(--ob-line);
+  font-size: 12.5px;
+  color: var(--ob-text-dim);
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity 0.3s var(--ob-ease), transform 0.3s var(--ob-ease);
+}
+.ob-layer.active .ob-bubble {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0) scale(1);
+  transition-delay: 0.15s;
+}
+
+.ob-tap-hint {
+  position: absolute;
+  left: 0;
+  top: calc(var(--ob-cube-total) / 2 + 52px);
+  transform: translateX(-50%);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #a79bff;
+  white-space: nowrap;
+  opacity: 0;
+  animation: ob-hint-pulse 2.2s ease-in-out infinite;
+}
+.ob-layer.active .ob-tap-hint { opacity: 1; }
+
+@keyframes ob-hint-pulse {
+  0%, 100% { opacity: 0.35; transform: translateX(-50%) translateY(0); }
+  50%      { opacity: 1;    transform: translateX(-50%) translateY(3px); }
+}
+
+.ob-mini {
+  position: absolute;
+  width: clamp(150px, 17vw, 200px);
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--ob-card);
+  border: 1px solid var(--ob-line);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.3);
+  opacity: 0;
+  transition: opacity 0.35s var(--ob-ease), transform 0.35s var(--ob-ease), border-color 0.3s var(--ob-ease);
+}
+.ob-mini-provider {
+  left: calc(clamp(150px, 17vw, 200px) / -2 - 34px);
+  top: calc(var(--ob-cube-total) / -2 - 118px);
+  transform: translate(-10px, 8px);
+}
+.ob-mini-config {
+  left: calc(clamp(150px, 17vw, 200px) / -2 + 34px);
+  top: calc(var(--ob-cube-total) / 2 + 56px);
+  transform: translate(10px, -8px);
+}
+.ob-layer.active .ob-mini-provider { opacity: 1; transform: translate(0, 0); transition-delay: 0.1s; }
+.ob-layer.active .ob-mini-config   { opacity: 1; transform: translate(0, 0); transition-delay: 0.28s; }
+
+.ob-mini.lit { border-color: var(--ob-accent); box-shadow: 0 6px 22px rgba(108, 92, 231, 0.35); }
+
+.ob-mini-label {
+  font-size: 9.5px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ob-text-faint);
+  margin-bottom: 3px;
+}
+.ob-mini-value { font-size: 12.5px; font-weight: 600; color: var(--ob-text); }
+.ob-mini-tags { display: flex; gap: 4px; margin-top: 6px; flex-wrap: wrap; }
+.ob-mini-tag {
+  font-size: 9px;
+  padding: 1px 7px;
+  border-radius: 4px;
+  background: #555;
+  color: #ccc;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+.ob-mini-tag.reality { background: #4a1a5a; color: #d78eff; }
+.ob-mini-tag.count   { background: #1f2d1f; color: #86efac; }
+.ob-mini-tag.good    { background: rgba(74, 222, 128, 0.16); color: #4ade80; }
+
+.ob-orbit {
+  position: absolute;
+  left: calc(var(--ob-cube-total) / 2 + 30px);
+  top: 0;
+  transform: translateY(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.ob-orbit-btn {
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--ob-card);
+  border: 1px solid var(--ob-line);
+  color: var(--ob-text-dim);
+  font-size: 17px;
+  font-weight: 700;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  opacity: 0;
+  transform: scale(0.7);
+  transition: opacity 0.3s var(--ob-ease), transform 0.3s var(--ob-ease), background 0.2s var(--ob-ease), color 0.2s var(--ob-ease);
+}
+.ob-layer.active .ob-orbit-btn { opacity: 1; transform: scale(1); }
+.ob-layer.active .ob-orbit-btn:nth-child(1) { transition-delay: 0.05s; }
+.ob-layer.active .ob-orbit-btn:nth-child(2) { transition-delay: 0.18s; }
+.ob-layer.active .ob-orbit-btn:nth-child(3) { transition-delay: 0.31s; }
+
+.ob-orbit-btn.highlight {
+  background: var(--ob-accent-soft);
+  border-color: var(--ob-accent);
+  color: #a79bff;
+}
+
+.ob-halo {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: calc(var(--ob-cube-total) + 70px);
+  height: calc(var(--ob-cube-total) + 70px);
+  margin: calc((var(--ob-cube-total) + 70px) / -2) 0 0 calc((var(--ob-cube-total) + 70px) / -2);
+  border-radius: 50%;
+  border: 1px dashed rgba(108, 92, 231, 0.45);
+  opacity: 0;
+  transform: scale(0.9);
+  transition: opacity 0.4s var(--ob-ease), transform 0.4s var(--ob-ease);
+}
+.ob-layer.active .ob-halo {
+  opacity: 1;
+  transform: scale(1);
+  animation: ob-halo-spin 26s linear infinite;
+}
+@keyframes ob-halo-spin {
+  to { transform: rotate(360deg); }
+}
+
+.ob-layer {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.4s var(--ob-ease);
+}
+.ob-layer.active { opacity: 1; }
+
+/* волны «нажатия» по кубу */
+.ob-tap-ring {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+.ob-tap-ring span {
+  position: absolute;
+  left: 0; top: 0;
+  width: 120px; height: 120px;
+  margin: -60px 0 0 -60px;
+  border-radius: 50%;
+  border: 2px solid var(--ob-accent);
+  opacity: 0;
+}
+.ob-tap-ring.pulse span { animation: ob-tap-ring 1.1s ease-out forwards; }
+.ob-tap-ring.pulse span:nth-child(2) { animation-delay: 0.22s; }
+.ob-tap-ring.pulse span:nth-child(3) { animation-delay: 0.44s; }
+
+@keyframes ob-tap-ring {
+  0%   { transform: scale(0.55); opacity: 0.85; }
+  100% { transform: scale(1.9);  opacity: 0; }
+}
+
+/* ── Навигация ──────────────────────────────────────────────────── */
+
+.ob-nav {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 76px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 clamp(20px, 3vw, 36px);
+  pointer-events: none;
+}
+.ob-nav > * { pointer-events: auto; }
+
+.ob-dots {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ob-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ob-line);
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  transition: background 0.25s var(--ob-ease), width 0.25s var(--ob-ease), border-radius 0.25s var(--ob-ease);
+}
+.ob-dot:hover { background: var(--ob-text-faint); }
+.ob-dot.active {
+  width: 22px;
+  border-radius: 4px;
+  background: var(--ob-accent);
+}
+
+.ob-next {
+  position: absolute;
+  right: clamp(20px, 3vw, 36px);
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  border: none;
+  background: var(--ob-accent);
+  color: #fff;
+  font-size: 19px;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  box-shadow: 0 6px 20px rgba(108, 92, 231, 0.4);
+  transition: transform 0.18s var(--ob-ease), box-shadow 0.18s var(--ob-ease), opacity 0.2s var(--ob-ease);
+}
+.ob-next:hover { transform: scale(1.06); box-shadow: 0 8px 26px rgba(108, 92, 231, 0.55); }
+.ob-next:active { transform: scale(0.96); }
+.ob-next:disabled { opacity: 0.35; cursor: default; box-shadow: none; transform: none; }
+
+.ob-back {
+  position: absolute;
+  left: clamp(20px, 3vw, 36px);
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  border: 1px solid var(--ob-line);
+  background: transparent;
+  color: var(--ob-text-dim);
+  font-size: 16px;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.25s var(--ob-ease), background 0.2s var(--ob-ease), color 0.2s var(--ob-ease);
+}
+.ob-back.visible { opacity: 1; pointer-events: auto; }
+.ob-back:hover { background: var(--ob-card); color: var(--ob-text); }
+
+/* ══════════════════════════════════════════════════════════════════
+   Режим онбординга: куб и статус переезжают в правую половину
+   ══════════════════════════════════════════════════════════════════ */
+
+body.onboarding .face-area,
+body.onboarding-leaving .face-area {
+  left: 75%;
+  top: 50%;
+}
+
+body.onboarding .pickers,
+body.onboarding-leaving .pickers {
+  left: 75%;
+  top: calc(50% + var(--ob-cube-total) / 2 + 18px);
+  width: auto;
+  max-width: 60vw;
+}
+
+/* в онбординге из .pickers нужен только статус */
+body.onboarding .picker-list,
+body.onboarding .ping-btn,
+body.onboarding .active-ping,
+body.onboarding .picker-card,
+body.onboarding-leaving .picker-list,
+body.onboarding-leaving .ping-btn,
+body.onboarding-leaving .active-ping {
+  display: none !important;
+}
+
+/* остальной хром прячем до конца онбординга */
+body.onboarding .import-btn,
+body.onboarding .refresh-btn,
+body.onboarding .hamburger,
+body.onboarding .toggle-wrapper,
+body.onboarding-leaving .import-btn,
+body.onboarding-leaving .refresh-btn,
+body.onboarding-leaving .hamburger,
+body.onboarding-leaving .toggle-wrapper {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* ── Выход: куб едет на своё место ──────────────────────────────── */
+
+/* Явно задаём конечные значения (как в cube.css / main_ui.html) и
+   transition — иначе куб не двигается, а прыгает в конце. */
+body.onboarding-leaving .face-area {
+  left: 50%;
+  top: 34%;
+  transition:
+    left 0.62s var(--ob-ease),
+    top 0.62s var(--ob-ease);
+}
+
+body.onboarding-leaving .pickers {
+  left: 50%;
+  top: 58%;
+  width: min(var(--pickers-w), 100vw);
+  max-width: none;
+  transition:
+    left 0.62s var(--ob-ease),
+    top 0.62s var(--ob-ease),
+    width 0.62s var(--ob-ease);
+}
+
+/* Пока куб едет, карточки селекторов скрыты — они проявляются
+   в общей волне появления UI. */
+body.onboarding-leaving .picker-card {
+  opacity: 0;
+}
+
+/* ── Появление кнопок от центра к краям ─────────────────────────── */
+
+body.ui-reveal .import-btn,
+body.ui-reveal .refresh-btn,
+body.ui-reveal .hamburger,
+body.ui-reveal .picker-card {
+  opacity: 0;
+  transform: translate(var(--rv-x, 0px), var(--rv-y, 0px)) scale(0.4);
+}
+
+body.ui-reveal .toggle-wrapper {
+  opacity: 0;
+  transform: translate(calc(-50% + var(--rv-x, 0px)), var(--rv-y, 0px)) scale(0.4);
+}
+
+.import-btn,
+.refresh-btn,
+.hamburger,
+.picker-card,
+.toggle-wrapper {
+  transition:
+    opacity 0.42s var(--ob-ease) var(--rv-delay, 0ms),
+    transform 0.42s var(--ob-ease) var(--rv-delay, 0ms),
+    background 0.2s ease,
+    color 0.2s ease;
+}
+
+/* ── Моргание: единственное, чего нет в клиенте ─────────────────── */
+
+.face-square.ob-blink .eye {
+  height: clamp(3px, 0.5vw, 5px);
+  top: 30%;
+  border-radius: 0 0 50% 50% / 0 0 100% 100%;
+  transition: height 0.09s ease, top 0.09s ease, border-radius 0.09s ease;
+}
+
+/* ── Узкое окно: куб сверху, текст снизу ────────────────────────── */
+
+@media (max-width: 760px) {
+  .ob-root { grid-template-columns: 1fr; grid-template-rows: 1fr; }
+  .ob-visual { display: none; }
+  .ob-text { padding-bottom: 88px; }
+
+  body.onboarding .face-area {
+    left: 50%;
+    top: 22%;
+  }
+  body.onboarding .pickers {
+    left: 50%;
+    top: calc(22% + var(--ob-cube-total) / 2 + 14px);
+    max-width: 90vw;
+  }
+}
+
+/* Низкое окно: сжимаем отступы, чтобы 4-й слайд с импортом влезал */
+@media (max-height: 640px) {
+  .ob-slide-inner { gap: 10px; }
+  .ob-slide h1 { font-size: clamp(20px, 2.6vw, 28px); }
+  .ob-lead { font-size: 12.5px; line-height: 1.5; }
+  .ob-note { font-size: 11.5px; }
+  .ob-option { padding: 9px 12px; }
+  .ob-option-desc { font-size: 11px; }
+  .ob-actions li { padding: 8px 10px; }
+  .ob-brand { margin-bottom: 16px; }
+}

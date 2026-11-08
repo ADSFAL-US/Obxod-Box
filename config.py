@@ -30,6 +30,8 @@ DEFAULTS: dict[str, Any] = {
     "routing_set": "RU-auto-routing",
     # ── автообновления ──
     "auto_update_enabled": True,
+    # ── онбординг первого запуска ──
+    "onboarding_completed": False,
 }
 
 

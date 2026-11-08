@@ -86,10 +86,12 @@ _CUBE_ASSETS: tuple[tuple[str, str], ...] = (
     ("style", "cube/animations/accents.css"),
     ("style", "cube/animations/connecting.css"),
     ("style", "cube/animations/network_down.css"),
+    ("style", "onboarding.css"),
     ("script", "cube/cube.js"),
     ("script", "cube/animations/registry.js"),
     ("script", "cube/animations/connecting.js"),
     ("script", "cube/animations/network_down.js"),
+    ("script", "onboarding.js"),
 )
 
 
@@ -1125,6 +1127,14 @@ class MainWindow:
             )
         elif action == "ping_all":
             asyncio.create_task(self._handle_ping_all())
+        elif action == "onboarding_ready":
+            asyncio.create_task(self._handle_onboarding_ready())
+        elif action == "onboarding_import":
+            asyncio.create_task(
+                self._handle_onboarding_import(msg.get("url"))
+            )
+        elif action == "onboarding_finish":
+            self._handle_onboarding_finish(msg.get("option"))
         else:
             logger.debug("unknown web action: %r", action)
 
@@ -1891,6 +1901,9 @@ class MainWindow:
                 active, len(records), selected_index,
                 self.config.get("routing_set"),
             )
+
+            # Состояние уже разложено — можно показывать онбординг
+            await self._handle_onboarding_ready()
         except Exception as e:
             logger.error("Bootstrap failed: %s", e, exc_info=True)
 
@@ -1947,78 +1960,7 @@ class MainWindow:
         logger.info("Имя от пользователя: %r", name)
 
         try:
-            content, headers = await self._fetch_subscription_raw(url)
-            decoded = self._decode_subscription_content(content)
-            if decoded is None:
-                raise ValueError("Не удалось декодировать тело подписки.")
-
-            logger.info("Первые 300 символов ответа:\n%s",
-                        decoded[:300].replace("\n", "\\n"))
-
-            xray_configs = self._parse_xray_configs(decoded)
-            share_links: list[str] = []
-            if not xray_configs:
-                logger.info("Xray-массив не обнаружен, пробую share-ссылки.")
-                share_links = self._parse_share_links(decoded)
-
-            if not xray_configs and not share_links:
-                raise ValueError(
-                    "В подписке не найдено ни Xray-конфигов, ни share-ссылок."
-                )
-
-            records: list[dict] = []
-            if xray_configs:
-                for i, cfg in enumerate(xray_configs):
-                    records.append({
-                        "id": _config_id("xray", cfg),
-                        "kind": "xray",
-                        "raw": cfg,
-                        "meta": self._extract_metadata_from_xray(cfg, i),
-                    })
-            else:
-                for i, link in enumerate(share_links):
-                    records.append({
-                        "id": _config_id("link", link),
-                        "kind": "link",
-                        "raw": link,
-                        "meta": self._extract_metadata_from_link(link, i),
-                    })
-
-            logger.info("Распознано конфигов: %d", len(records))
-
-            provider_name = self._resolve_provider_name(name, headers, records)
-            provider_name = _sanitize_provider_name(provider_name)
-            logger.info("Имя провайдера: %s", provider_name)
-
-            provider_dir = self._providers_dir()
-            provider_dir.mkdir(parents=True, exist_ok=True)
-            provider_file = provider_dir / f"{provider_name}.json"
-
-            data_to_save = {
-                "name": provider_name,
-                "url": url,
-                "updated_at": time.time(),
-                "configs": records,
-            }
-            provider_file.write_text(
-                json.dumps(data_to_save, indent=2, ensure_ascii=False),
-                encoding="utf-8",
-            )
-            logger.info("Сохранено в %s", provider_file)
-
-            running = await asyncio.to_thread(lambda: self.xray_manager.is_running)
-            if running:
-                logger.info("Импорт: останавливаю Xray (конфиг сменился)")
-                await asyncio.to_thread(self.xray_manager.stop)
-                self._want_xray_running = False
-
-            self._ping_generation += 1
-            self._loaded_configs = records
-
-            self.config.set("active_provider", provider_name)
-            self.config.set("active_config_id", None)
-            self.config.save()
-
+            provider_name, records = await self._import_subscription(url, name)
             providers = await asyncio.to_thread(self._list_providers)
             await self._push_state(providers, provider_name, records, -1)
 
@@ -2032,6 +1974,153 @@ class MainWindow:
             await self._push_js_safe(js)
 
         logger.info("=" * 60)
+
+    async def _import_subscription(
+        self, url: str, name: str | None
+    ) -> tuple[str, list[dict]]:
+        """Скачивает подписку, сохраняет провайдера и делает его активным.
+
+        Возвращает (имя провайдера, записи конфигов). Бросает исключение,
+        если подписку не удалось разобрать — вызывающий сам решает, как
+        показать ошибку.
+        """
+        content, headers = await self._fetch_subscription_raw(url)
+        decoded = self._decode_subscription_content(content)
+        if decoded is None:
+            raise ValueError("Не удалось декодировать тело подписки.")
+
+        logger.info("Первые 300 символов ответа:\n%s",
+                    decoded[:300].replace("\n", "\\n"))
+
+        xray_configs = self._parse_xray_configs(decoded)
+        share_links: list[str] = []
+        if not xray_configs:
+            logger.info("Xray-массив не обнаружен, пробую share-ссылки.")
+            share_links = self._parse_share_links(decoded)
+
+        if not xray_configs and not share_links:
+            raise ValueError(
+                "В подписке не найдено ни Xray-конфигов, ни share-ссылок."
+            )
+
+        records: list[dict] = []
+        if xray_configs:
+            for i, cfg in enumerate(xray_configs):
+                records.append({
+                    "id": _config_id("xray", cfg),
+                    "kind": "xray",
+                    "raw": cfg,
+                    "meta": self._extract_metadata_from_xray(cfg, i),
+                })
+        else:
+            for i, link in enumerate(share_links):
+                records.append({
+                    "id": _config_id("link", link),
+                    "kind": "link",
+                    "raw": link,
+                    "meta": self._extract_metadata_from_link(link, i),
+                })
+
+        logger.info("Распознано конфигов: %d", len(records))
+
+        provider_name = self._resolve_provider_name(name, headers, records)
+        provider_name = _sanitize_provider_name(provider_name)
+        logger.info("Имя провайдера: %s", provider_name)
+
+        provider_dir = self._providers_dir()
+        provider_dir.mkdir(parents=True, exist_ok=True)
+        provider_file = provider_dir / f"{provider_name}.json"
+
+        data_to_save = {
+            "name": provider_name,
+            "url": url,
+            "updated_at": time.time(),
+            "configs": records,
+        }
+        provider_file.write_text(
+            json.dumps(data_to_save, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        logger.info("Сохранено в %s", provider_file)
+
+        running = await asyncio.to_thread(lambda: self.xray_manager.is_running)
+        if running:
+            logger.info("Импорт: останавливаю Xray (конфиг сменился)")
+            await asyncio.to_thread(self.xray_manager.stop)
+            self._want_xray_running = False
+
+        self._ping_generation += 1
+        self._loaded_configs = records
+
+        self.config.set("active_provider", provider_name)
+        self.config.set("active_config_id", None)
+        self.config.save()
+
+        return provider_name, records
+
+    # ------------------------------------------------------------------
+    # Онбординг первого запуска
+    # ------------------------------------------------------------------
+    async def _handle_onboarding_ready(self) -> None:
+        """JS готов — решаем, показывать ли онбординг."""
+        completed = bool(self.config.get("onboarding_completed", False))
+        # Миграция: у существующих пользователей провайдер уже настроен,
+        # значит онбординг им не нужен.
+        if not completed and self.config.get("active_provider"):
+            completed = True
+            self.config.set("onboarding_completed", True)
+            self.config.save()
+            logger.info("Онбординг: провайдер уже настроен — считаем пройденным")
+
+        if completed:
+            logger.info("Онбординг: пропущен (уже пройден)")
+            return
+
+        logger.info("Онбординг: показываем")
+        await self._push_js_safe("window.obStartOnboarding && window.obStartOnboarding();")
+
+    async def _handle_onboarding_import(self, url: str | None) -> None:
+        """Импорт подписки прямо из онбординга (без модалки)."""
+        url = (url or "").strip()
+        if not url:
+            await self._push_js_safe(
+                "window.obOnboardingImportResult(false, 'Пустая ссылка');"
+            )
+            return
+
+        if self._import_lock.locked():
+            await self._push_js_safe(
+                "window.obOnboardingImportResult(false, 'Импорт уже идёт');"
+            )
+            return
+
+        async with self._import_lock:
+            try:
+                provider_name, records = await self._import_subscription(url, None)
+            except Exception as e:
+                logger.error("Онбординг: импорт не удался: %s", e, exc_info=True)
+                await self._push_js_safe(
+                    "window.obOnboardingImportResult(false, "
+                    + json.dumps(str(e), ensure_ascii=False) + ");"
+                )
+                return
+
+        providers = await asyncio.to_thread(self._list_providers)
+        await self._push_state(providers, provider_name, records, -1)
+        await self._push_js_safe(
+            "window.obOnboardingImportResult(true, "
+            + json.dumps(
+                f"Провайдер «{provider_name}»: {len(records)} конфигов",
+                ensure_ascii=False,
+            )
+            + ");"
+        )
+
+    def _handle_onboarding_finish(self, option: str | None) -> None:
+        """Пользователь прошёл онбординг — запоминаем выбор."""
+        logger.info("Онбординг завершён: вариант=%r", option)
+        self.config.set("onboarding_completed", True)
+        self.config.save()
 
     # ------------------------------------------------------------------
     # Обновление подписки

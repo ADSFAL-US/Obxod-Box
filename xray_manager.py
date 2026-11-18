@@ -742,6 +742,23 @@ class XrayManager:
         except Exception:
             return
         if not resp.get("ok"):
+            proc = self._supervisor_proc
+            if (
+                proc is not None
+                and proc.poll() is not None
+                and self._status in (STATUS_RUNNING, STATUS_STARTING)
+            ):
+                logger.warning(
+                    "Supervisor завершился (exit=%s) — Xray больше не под контролем",
+                    proc.returncode,
+                )
+                self._current_inbound_ports = []
+                self._current_had_tun = False
+                self._runtime_config = {}
+                self._set_status(
+                    STATUS_ERROR,
+                    "Соединение разорвано: процесс-надзиратель Xray завершился",
+                )
             return
         xray = resp.get("xray") or {}
         if xray.get("running"):

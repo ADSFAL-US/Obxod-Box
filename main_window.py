@@ -1313,6 +1313,7 @@ class MainWindow:
     def _save_mode(self, mode: str | None) -> None:
         if mode not in VALID_MODES:
             logger.warning("Интерфейс передал недопустимый режим: %r", mode)
+            asyncio.create_task(self._release_ui_busy())
             return
         old_mode = self.config.mode
         self.config.mode = mode

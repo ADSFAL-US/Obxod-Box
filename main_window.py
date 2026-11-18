@@ -9,6 +9,7 @@ import sys
 import threading
 import time
 import urllib.request
+import webbrowser
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
@@ -18,6 +19,7 @@ from toga.handlers import WeakrefCallable
 from toga.style import Pack
 
 from config import VALID_MODES
+from network_diagnostics import kill_process, run_diagnostics
 from network_watcher import NetworkEvent, NetworkState, NetworkWatcher
 from platform_info import get_platform, supports_system_tray
 from platform_tray import TrayCallbacks, create_tray
@@ -203,7 +205,11 @@ class MainWindow:
         self._toggle_lock = asyncio.Lock()
         self._ping_lock = asyncio.Lock()
         self._restart_lock = asyncio.Lock()
+        self._diagnostics_lock = asyncio.Lock()
         self._ping_generation = 0
+        self._diagnostics_generation = 0
+        self._last_diagnostics: dict = {}
+        self._diagnostics_pids: dict[int, str] = {}
 
         self._is_resizing: bool = False
         self._resize_timer: threading.Timer | None = None
@@ -1127,6 +1133,14 @@ class MainWindow:
             )
         elif action == "ping_all":
             asyncio.create_task(self._handle_ping_all())
+        elif action == "run_diagnostics":
+            asyncio.create_task(self._run_diagnostics("manual"))
+        elif action == "kill_conflict_process":
+            asyncio.create_task(
+                self._handle_kill_conflict_process(msg.get("pid"))
+            )
+        elif action == "open_url":
+            asyncio.create_task(self._handle_open_url(msg.get("url")))
         elif action == "onboarding_ready":
             asyncio.create_task(self._handle_onboarding_ready())
         elif action == "onboarding_import":
@@ -1307,7 +1321,17 @@ class MainWindow:
         logger.info("Режим из интерфейса сохранён: %s (было %s)", mode, old_mode)
 
         if old_mode != mode:
-            asyncio.create_task(self._restart_xray_after_mode_change_if_running())
+            asyncio.create_task(self._apply_mode_change())
+        else:
+            asyncio.create_task(self._release_ui_busy())
+
+    async def _apply_mode_change(self) -> None:
+        try:
+            await self._restart_xray_after_mode_change_if_running()
+        finally:
+            # Кнопки режима заблокированы с момента клика. Снимаем
+            # блокировку только когда ядро ответило (или перезапуск не нужен).
+            await self._release_ui_busy()
 
     async def _restart_xray_after_mode_change_if_running(self) -> None:
         running = await asyncio.to_thread(lambda: self.xray_manager.is_running)
@@ -1318,6 +1342,7 @@ class MainWindow:
             return
         try:
             async with self._restart_lock:
+                logger.info("Перезапуск Xray после смены режима")
                 await self.xray_manager.restart(record["raw"])
         except Exception as e:
             logger.error("Авто-перезапуск после смены режима упал: %s", e, exc_info=True)
@@ -1433,8 +1458,25 @@ class MainWindow:
                     lambda: (self.xray_manager.status, self.xray_manager.status_message)
                 )
                 if cur != last:
+                    prev = last
                     last = cur
                     await self._push_xray_status(*cur)
+
+                    if cur[0] == "running" and (prev is None or prev[0] != "running"):
+                        asyncio.create_task(self._run_diagnostics("connected"))
+                    elif (
+                        cur[0] == "error"
+                        and prev is not None
+                        and prev[0] in ("running", "starting", "stopping")
+                    ):
+                        title = (
+                            "Не удалось подключиться"
+                            if prev[0] == "starting"
+                            else "Соединение разорвано"
+                        )
+                        asyncio.create_task(
+                            self._notify_connection_lost(cur[1], title)
+                        )
             except Exception as e:
                 logger.debug("status poller error: %s", e)
             await asyncio.sleep(1.2)
@@ -1450,6 +1492,128 @@ class MainWindow:
             await self._push_js_safe(js)
         else:
             self._queue_js_state("xray_status", {"status": status, "message": message or ""})
+
+    async def _release_ui_busy(self) -> None:
+        """Снимает блокировку кнопок, поставленную оптимистичным кликом."""
+        await self._push_js_safe("window.setUiBusy && window.setUiBusy(false);")
+        try:
+            status, msg = await asyncio.to_thread(
+                lambda: (self.xray_manager.status, self.xray_manager.status_message)
+            )
+            await self._push_xray_status(status, msg)
+        except Exception as e:
+            logger.debug("release ui busy status: %s", e)
+
+    async def _notify_connection_lost(self, message: str, title: str) -> None:
+        js = (
+            "window.showConnectionLost && window.showConnectionLost("
+            + json.dumps(message or "", ensure_ascii=False) + ", "
+            + json.dumps(title, ensure_ascii=False)
+            + ");"
+        )
+        await self._push_js_safe(js)
+
+    async def _run_diagnostics(self, reason: str = "manual") -> None:
+        if self._diagnostics_lock.locked():
+            logger.info("Диагностика уже идёт — пропускаю (%s)", reason)
+            return
+        async with self._diagnostics_lock:
+            self._diagnostics_generation += 1
+            gen = self._diagnostics_generation
+            logger.info("Запуск диагностики сети: %s", reason)
+            url = str(self.config.get("ping_url", DEFAULT_PING_URL))
+            timeout = float(self.config.get("ping_timeout", 5))
+            try:
+                report = await asyncio.to_thread(
+                    run_diagnostics,
+                    self.xray_manager,
+                    self.config,
+                    probe_url=url,
+                    probe_timeout=timeout,
+                )
+            except Exception as e:
+                logger.error("Диагностика сети упала: %s", e, exc_info=True)
+                return
+            if gen != self._diagnostics_generation:
+                return
+            result = report.to_dict() if hasattr(report, "to_dict") else report
+            if not isinstance(result, dict):
+                logger.warning("Диагностика вернула неожиданный результат: %r", result)
+                return
+            self._last_diagnostics = result
+            pids: dict[int, str] = {}
+            for issue in result.get("issues", []):
+                for proc in issue.get("processes") or []:
+                    try:
+                        pid = int(proc.get("pid"))
+                    except (TypeError, ValueError):
+                        continue
+                    pids[pid] = str(proc.get("name") or "процесс")
+                if issue.get("pid"):
+                    try:
+                        pids[int(issue["pid"])] = str(
+                            issue.get("process_name") or "процесс"
+                        )
+                    except (TypeError, ValueError, KeyError):
+                        pass
+            self._diagnostics_pids = pids
+            logger.info(
+                "Диагностика сети: ok=%s traffic=%s issues=%d",
+                result.get("ok"), result.get("traffic_ok"),
+                len(result.get("issues") or []),
+            )
+            js = (
+                "window.showDiagnostics && window.showDiagnostics("
+                + json.dumps(result, ensure_ascii=False)
+                + ");"
+            )
+            await self._push_js_safe(js)
+
+    async def _handle_kill_conflict_process(self, pid) -> None:
+        try:
+            pid_int = int(pid)
+        except (TypeError, ValueError):
+            logger.warning("kill_conflict_process: плохой pid=%r", pid)
+            return
+        if pid_int not in self._diagnostics_pids:
+            logger.warning(
+                "kill_conflict_process: PID %s не найден в последней диагностике",
+                pid_int,
+            )
+            await self._push_js_safe(
+                "window.showDiagnosticsError && "
+                "window.showDiagnosticsError('Процесс не найден в результатах проверки');"
+            )
+            return
+        logger.info(
+            "Завершаю конфликтующий процесс %s (PID %s)",
+            self._diagnostics_pids.get(pid_int), pid_int,
+        )
+        ok, detail = await asyncio.to_thread(kill_process, pid_int)
+        if not ok:
+            await self._push_js_safe(
+                "window.showDiagnosticsError && "
+                "window.showDiagnosticsError("
+                + json.dumps(f"Не удалось завершить процесс: {detail}", ensure_ascii=False)
+                + ");"
+            )
+            return
+        await self._run_diagnostics("after_kill")
+
+    async def _handle_open_url(self, url) -> None:
+        if not isinstance(url, str):
+            return
+        url = url.strip()
+        # Открываем только отчёты в нашем репозитории — не даём мосту
+        # превратиться в универсальный «открой любую ссылку».
+        if not url.startswith("https://github.com/ADSFAL-US/Obxod-Box/"):
+            logger.warning("open_url: отклонён URL %r", url)
+            return
+        try:
+            import webbrowser
+            await asyncio.to_thread(webbrowser.open, url)
+        except Exception as e:
+            logger.warning("open_url failed: %s", e)
 
     # ------------------------------------------------------------------
     # Настройки
@@ -2384,34 +2548,64 @@ class MainWindow:
     # Выбор конфига
     # ------------------------------------------------------------------
     async def _handle_config_selection(self, index) -> None:
-        # JSON/JS bridge может отдать int, float или str
         try:
-            index = int(index)
-        except (TypeError, ValueError):
-            logger.warning("select_config: плохой index=%r", index)
-            return
-        if not (0 <= index < len(self._loaded_configs)):
-            logger.warning(
-                "Недопустимый индекс конфига: %r (всего %d)",
-                index, len(self._loaded_configs),
+            # JSON/JS bridge может отдать int, float или str
+            try:
+                index = int(index)
+            except (TypeError, ValueError):
+                logger.warning("select_config: плохой index=%r", index)
+                return
+            if not (0 <= index < len(self._loaded_configs)):
+                logger.warning(
+                    "Недопустимый индекс конфига: %r (всего %d)",
+                    index, len(self._loaded_configs),
+                )
+                return
+
+            record = self._loaded_configs[index]
+            name = record["meta"].get("name") or f"Config #{index}"
+
+            self.config.set("active_config_id", record["id"])
+            self.config.save()
+            logger.info("Выбран конфиг [%d] id=%s: %s (kind=%s)",
+                        index, record["id"], name, record["kind"])
+
+            # Подтверждаем выбор в UI (на случай рассинхрона)
+            await self._push_state(
+                await asyncio.to_thread(self._list_providers),
+                self.config.get("active_provider"),
+                self._loaded_configs,
+                index,
             )
-            return
 
-        record = self._loaded_configs[index]
-        name = record["meta"].get("name") or f"Config #{index}"
+            running = await asyncio.to_thread(lambda: self.xray_manager.is_running)
+            if not running:
+                return
 
-        self.config.set("active_config_id", record["id"])
-        self.config.save()
-        logger.info("Выбран конфиг [%d] id=%s: %s (kind=%s)",
-                    index, record["id"], name, record["kind"])
+            if record["kind"] != "xray":
+                logger.info("Смена конфига: link-конфиг, останавливаю Xray")
+                await asyncio.to_thread(self.xray_manager.stop)
+                self._want_xray_running = False
+                await self._push_xray_status(
+                    "error", "Link-конфиг ещё не поддерживается"
+                )
+                return
 
-        # Подтверждаем выбор в UI (на случай рассинхрона)
-        await self._push_state(
-            await asyncio.to_thread(self._list_providers),
-            self.config.get("active_provider"),
-            self._loaded_configs,
-            index,
-        )
+            self._want_xray_running = True
+            try:
+                async with self._restart_lock:
+                    logger.info("Перезапуск Xray после смены активного конфига")
+                    await self.xray_manager.restart(record["raw"])
+            except Exception as e:
+                logger.error(
+                    "Перезапуск после смены конфига упал: %s", e, exc_info=True
+                )
+                await self._push_xray_status(
+                    "error", f"Не удалось перезапустить Xray: {e}"
+                )
+        finally:
+            # Кнопки заблокированы с момента клика, пока ядро не ответит.
+            await self._release_ui_busy()
 
     # ------------------------------------------------------------------
     # Windows-специфичное

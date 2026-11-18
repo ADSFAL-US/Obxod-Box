@@ -44,7 +44,8 @@
   border-color: #4ade80;
   box-shadow: 0 0 20px rgba(74, 222, 128, 0.3);
 }
-.face-square.status-starting {
+.face-square.status-starting,
+.face-square.status-stopping {
   border-color: #fbbf24;
 }
 .face-square.status-error {
@@ -71,9 +72,20 @@
 .eye.right { right: 21%; }
 
 .status-running .eye { background: #4ade80; }
-.status-starting .eye { background: #fbbf24; }
+.status-starting .eye,
+.status-stopping .eye { background: #fbbf24; }
 .status-error .eye { background: #ef4444; }
 .status-network_down .eye { background: #fbbf24; }
+
+/* Пока ядро отвечает, куб и тоггл не принимают повторные клики. */
+.face-container.is-pending {
+  pointer-events: none;
+  cursor: default;
+}
+body.toggle-busy .toggle-wrapper {
+  pointer-events: none;
+  opacity: 0.6;
+}
 
 /* Legacy loop classes — остаются для дефолтных accent-модулей */
 .face-container.status-starting {

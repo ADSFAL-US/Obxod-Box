@@ -117,11 +117,7 @@
         toggleHandler(e);
         return;
       }
-      // дефолт: как раньше — toggle connection
-      if (currentStatus === "starting") return;
-      if (typeof global.sendToPython === "function") {
-        global.sendToPython({ action: "toggle_connection" });
-      }
+      toggleConnection();
     });
 
     // idle tracking
@@ -271,6 +267,7 @@
     var base = ["face-square"];
     var statusClasses = [
       "status-stopped",
+      "status-stopping",
       "status-starting",
       "status-running",
       "status-error",
@@ -285,8 +282,81 @@
     }
   }
 
-  function setStatus(status, message) {
+  function clearBusyTimer() {
+    if (busyTimer !== null) {
+      clearTimeout(busyTimer);
+      busyTimer = null;
+    }
+  }
+
+  function setPendingClass(on) {
+    if (ctx && ctx.container) {
+      ctx.container.classList.toggle("is-pending", !!on);
+    }
+    if (document.body) {
+      document.body.classList.toggle("toggle-busy", !!on);
+    }
+  }
+
+  function finishPending() {
+    pendingTarget = null;
+    busy = false;
+    clearBusyTimer();
+    setPendingClass(false);
+  }
+
+  function beginPending(target) {
+    pendingTarget = target;
+    busy = true;
+    clearBusyTimer();
+    setPendingClass(true);
+    // Страховка: если бэкенд не ответил совсем, не держим UI вечно.
+    busyTimer = setTimeout(function () {
+      console.warn("ObxodCube: pending timeout, unlocking UI");
+      finishPending();
+    }, BUSY_TIMEOUT_MS);
+  }
+
+  /** Внешняя блокировка (смена режима/конфига, импорт и т.п.). */
+  function setBusy(on) {
     ensureMounted();
+    if (on) {
+      if (!busy) {
+        pendingTarget = "external";
+        busy = true;
+        clearBusyTimer();
+        busyTimer = setTimeout(function () {
+          console.warn("ObxodCube: external busy timeout, unlocking UI");
+          finishPending();
+        }, BUSY_TIMEOUT_MS);
+      }
+      setPendingClass(true);
+    } else {
+      finishPending();
+    }
+  }
+
+  function isBusy() {
+    return busy;
+  }
+
+  /** Оптимистичный клик по кубу: анимация и блокировка — мгновенно. */
+  function toggleConnection() {
+    if (busy) return;
+    if (currentStatus === "starting" || currentStatus === "stopping") return;
+    const target = currentStatus === "running" ? "stopped" : "running";
+    beginPending(target);
+    if (target === "running") {
+      applyStatus("starting", "Подключение...");
+    } else {
+      applyStatus("stopping", "Отключение...");
+    }
+    if (typeof global.sendToPython === "function") {
+      global.sendToPython({ action: "toggle_connection" });
+    }
+  }
+
+  function applyStatus(status, message) {
     const st = status || "stopped";
     const msg = message || "";
     const was = prevStatus;
@@ -331,6 +401,33 @@
     }
   }
 
+  function setStatus(status, message) {
+    ensureMounted();
+    const st = status || "stopped";
+
+    // Пока идёт оптимистичное ожидание, игнорируем устаревшие статусы,
+    // которые приходят от poller'а (например, старый running после клика
+    // на отключение). Финальный статус снимает блокировку.
+    if (pendingTarget === "running") {
+      if (st === "running" || st === "error" || st === "network_down") {
+        finishPending();
+      } else if (st === "starting") {
+        applyStatus(st, message || "Подключение...");
+        return;
+      } else {
+        return;
+      }
+    } else if (pendingTarget === "stopped") {
+      if (st === "stopped" || st === "error" || st === "network_down") {
+        finishPending();
+      } else {
+        return;
+      }
+    }
+
+    applyStatus(st, message);
+  }
+
   function getStatus() {
     return currentStatus;
   }
@@ -364,6 +461,8 @@
     stopAccent: stopAccent,
     registerAnimation: registerAnimation,
     setWindowVisible: setWindowVisible,
+    setBusy: setBusy,
+    isBusy: isBusy,
     refreshAnchor: refreshAnchor,
     onToggle: onToggle,
     /** @private debug */

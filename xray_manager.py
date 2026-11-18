@@ -17,6 +17,7 @@ import os
 import random
 import re
 import socket
+import statistics
 import subprocess
 import sys
 import threading
@@ -44,6 +45,7 @@ DEFAULT_XRAY_CFG = {
 }
 
 STATUS_STOPPED = "stopped"
+STATUS_STOPPING = "stopping"
 STATUS_STARTING = "starting"
 STATUS_RUNNING = "running"
 STATUS_ERROR = "error"
@@ -54,6 +56,13 @@ _SKIP_INBOUND_PROTOS = {"dokodemo-door", "tunnel", "dns"}
 PING_PORT_RANGE: tuple[int, int] = (20000, 40000)
 PING_USER_AGENT = "obxod-box/ping"
 PING_INBOUND_TAG = "obxod-ping-in"
+
+# Первый запрос только прогревает TLS/туннель и DNS — его время не считаем.
+# Затем берём несколько замеров и отдаём медиану: одиночный выброс не должен
+# превращать рабочий конфиг в «плохой».
+PING_WARMUP_ATTEMPTS = 2
+PING_SAMPLES = 3
+PING_SAMPLE_PAUSE = 0.12
 
 MAX_LOG_SIZE_BYTES = 5 * 1024 * 1024
 KEEP_TAIL_BYTES    = 512 * 1024
@@ -230,6 +239,8 @@ class XrayManager:
         self._current_inbound_ports: list[int] = []
         self._current_mode: str = ""
         self._current_had_tun: bool = False
+        self._runtime_config: dict = {}
+        self._last_exit_code: int | None = None
 
         self._last_raw_config: dict | None = None
 
@@ -683,10 +694,35 @@ class XrayManager:
 
         proc, port = self._spawn_ping_xray(xray_config, timeout)
         try:
-            self._http_get_via_proxy(port, url, timeout)
-            t0 = time.perf_counter()
-            self._http_get_via_proxy(port, url, timeout)
-            return int((time.perf_counter() - t0) * 1000)
+            warmup_error: Exception | None = None
+            for attempt in range(PING_WARMUP_ATTEMPTS):
+                try:
+                    self._http_get_via_proxy(port, url, timeout)
+                    warmup_error = None
+                    break
+                except Exception as exc:
+                    warmup_error = exc
+                    if attempt + 1 < PING_WARMUP_ATTEMPTS:
+                        time.sleep(PING_SAMPLE_PAUSE)
+            if warmup_error is not None:
+                raise RuntimeError(f"Прогрев туннеля не удался: {warmup_error}")
+
+            samples: list[int] = []
+            last_error: Exception | None = None
+            for index in range(PING_SAMPLES):
+                t0 = time.perf_counter()
+                try:
+                    self._http_get_via_proxy(port, url, timeout)
+                except Exception as exc:
+                    last_error = exc
+                    continue
+                samples.append(int((time.perf_counter() - t0) * 1000))
+                if index + 1 < PING_SAMPLES:
+                    time.sleep(PING_SAMPLE_PAUSE)
+
+            if not samples:
+                raise RuntimeError(f"Все замеры пинга неудачны: {last_error}")
+            return int(statistics.median(samples))
         finally:
             try:
                 proc.kill()
@@ -713,12 +749,17 @@ class XrayManager:
         rc = xray.get("exit_code")
         if rc is None:
             return
-        if self._status in (STATUS_STOPPED, STATUS_ERROR):
+        if self._status in (STATUS_STOPPED, STATUS_STOPPING, STATUS_ERROR):
             return
         logger.warning("Xray завершился (exit=%s)", rc)
+        self._last_exit_code = int(rc)
         self._current_inbound_ports = []
         self._current_had_tun = False
-        self._set_status(STATUS_ERROR, f"Xray завершился (код {rc})")
+        self._runtime_config = {}
+        self._set_status(
+            STATUS_ERROR,
+            f"Соединение разорвано: Xray завершился (код {rc})",
+        )
 
     @property
     def status(self) -> str:
@@ -732,6 +773,38 @@ class XrayManager:
     @property
     def last_raw_config(self) -> dict | None:
         return self._last_raw_config
+
+    @property
+    def runtime_config(self) -> dict:
+        """Актуальный runtime-конфиг Xray (для диагностики сети)."""
+        return self._runtime_config
+
+    @property
+    def current_inbound_ports(self) -> list[int]:
+        return list(self._current_inbound_ports)
+
+    @property
+    def current_mode(self) -> str:
+        return self._current_mode
+
+    @property
+    def xray_status(self) -> dict:
+        """Снимок состояния xray от supervisor'а: running/pid/exit_code."""
+        client = self._supervisor_client
+        if client is None:
+            return {}
+        try:
+            resp = client.status()
+        except Exception:
+            return {}
+        if not resp.get("ok"):
+            return {}
+        return dict(resp.get("xray") or {})
+
+    @property
+    def xray_pid(self) -> int | None:
+        pid = self.xray_status.get("pid")
+        return int(pid) if isinstance(pid, int) else None
 
     def set_network_down(self) -> None:
         self._set_status(STATUS_NETWORK_DOWN, "Нет сети")
@@ -768,7 +841,9 @@ class XrayManager:
             raise
 
         self._last_raw_config = dict(xray_config)
+        self._runtime_config = runtime
         self._current_inbound_ports = _extract_inbound_ports(runtime)
+        self._last_exit_code = None
 
         try:
             old_size = self.log_file.stat().st_size if self.log_file.exists() else 0
@@ -777,6 +852,10 @@ class XrayManager:
                 logger.info("Лог перед стартом был %d байт — очищен", old_size)
         except OSError:
             pass
+
+        # Статус выставляем до общения с supervisor: интерфейс должен
+        # показывать анимацию сразу, не ожидая ответа ядра.
+        self._set_status(STATUS_STARTING, "Запуск Xray...")
 
         try:
             client = self._ensure_supervisor()
@@ -796,7 +875,6 @@ class XrayManager:
             len(json.dumps(runtime, ensure_ascii=False)),
         )
 
-        self._set_status(STATUS_STARTING, "Запуск Xray...")
         # Пост-старт (cleaner + ready-watcher) требует event loop.
         # Метод могут вызвать из to_thread → ставим задачи через loop.
         self._schedule_on_loop(self._post_start_on_loop)
@@ -831,8 +909,14 @@ class XrayManager:
                                     "Xray умер при старте (exit=%s). Смотри %s",
                                     rc, self.log_file.name,
                                 )
+                                self._last_exit_code = int(rc)
+                                self._current_inbound_ports = []
+                                self._current_had_tun = False
+                                self._runtime_config = {}
                                 self._set_status(
-                                    STATUS_ERROR, f"Xray завершился (код {rc})"
+                                    STATUS_ERROR,
+                                    f"Соединение не установлено: "
+                                    f"Xray завершился (код {rc})",
                                 )
                                 return
                     except Exception as exc:
@@ -858,18 +942,30 @@ class XrayManager:
         # из рабочего потока (asyncio.to_thread).
         self._schedule_on_loop(self._cancel_loop_tasks)
 
+        # Сразу показываем «Отключение...»: UI не должен ждать supervisor'а.
+        self._set_status(STATUS_STOPPING, "Отключение...")
+
         client = self._supervisor_client
         if client is not None:
             try:
                 resp = client.stop()
                 if not resp.get("ok"):
-                    logger.warning("supervisor stop failed: %s",
-                                   resp.get("error") or resp.get("message"))
+                    msg = resp.get("error") or resp.get("message") or "unknown error"
+                    logger.warning("supervisor stop failed: %s", msg)
+                    self._set_status(
+                        STATUS_ERROR,
+                        f"Не удалось остановить Xray: {msg}",
+                    )
+                    return
             except Exception as e:
                 logger.warning("supervisor stop exception: %s", e)
+                self._set_status(STATUS_ERROR, f"Не удалось остановить Xray: {e}")
+                return
 
         self._current_inbound_ports = []
         self._current_had_tun = False
+        self._runtime_config = {}
+        self._last_exit_code = None
         self._set_status(STATUS_STOPPED, "")
 
     def _cancel_loop_tasks(self) -> None:

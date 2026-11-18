@@ -440,7 +440,8 @@
   .btn-submit:hover { background: #5a4bcf; }
 
   /* ── Диагностика сети ─────────────────────────────────────────── */
-  #diagModal { z-index: 400; }
+  #diagModal,
+  #proxyWarningModal { z-index: 400; }
   .diag-content {
     width: clamp(300px, 82vw, 540px);
     max-height: 82vh;
@@ -751,6 +752,21 @@
     line-height: 1.4;
     margin: 4px 0 8px;
   }
+  .settings-hint.warn { color: #fbbf24; }
+  .settings-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin: 10px 0 4px;
+  }
+  .settings-actions button {
+    padding: 8px 14px;
+    border-radius: 8px;
+    border: none;
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+  }
 
   .settings-value {
     font-size: 13px;
@@ -1026,6 +1042,17 @@
     </div>
   </div>
 
+  <div class="modal-overlay" id="proxyWarningModal">
+    <div class="modal-content">
+      <h3>Небезопасный прокси</h3>
+      <div class="diag-summary" id="proxyWarningText"></div>
+      <div class="modal-actions">
+        <button class="btn-cancel" onclick="cancelProxyWarning()">Отмена</button>
+        <button class="btn-submit" onclick="continueProxyWarning()">Всё равно подключиться</button>
+      </div>
+    </div>
+  </div>
+
   <div class="toggle-wrapper">
       <div class="toggle-track">
         <div class="toggle-segment" data-mode="tun">TUN</div>
@@ -1083,6 +1110,28 @@
         </div>
 
         <div class="settings-section">
+          <div class="settings-section-title">Прокси</div>
+
+          <div class="settings-item">
+            <label for="qProxyListen">Слушать</label>
+            <select id="qProxyListen">
+              <option value="127.0.0.1">127.0.0.1 — только этот ПК</option>
+              <option value="0.0.0.0">0.0.0.0 — доступен по сети</option>
+            </select>
+          </div>
+
+          <div class="settings-item">
+            <label for="qProxyAuth">Требовать логин и пароль</label>
+            <label class="switch">
+              <input type="checkbox" id="qProxyAuth">
+              <span></span>
+            </label>
+          </div>
+
+          <div class="settings-hint" id="qProxyHint"></div>
+        </div>
+
+        <div class="settings-section">
           <div class="settings-section-title">Автообновления</div>
 
           <div class="settings-item">
@@ -1120,6 +1169,7 @@
         <div class="settings-tab active" data-tab="xray">Xray</div>
         <div class="settings-tab" data-tab="routing">Маршрутизация</div>
         <div class="settings-tab" data-tab="network">Сеть</div>
+        <div class="settings-tab" data-tab="proxy">Прокси</div>
         <div class="settings-tab" data-tab="ping">Пинг</div>
         <div class="settings-tab" data-tab="updates">Обновления</div>
         <div class="settings-tab" data-tab="about">О приложении</div>
@@ -1194,6 +1244,49 @@
                 <input type="checkbox" id="setRestartIface">
                 <span></span>
               </label>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-page" data-page="proxy">
+          <h3>Прокси</h3>
+          <div class="settings-section">
+            <div class="settings-item">
+              <label for="setProxyListen">Адрес прослушивания</label>
+              <select id="setProxyListen">
+                <option value="127.0.0.1">127.0.0.1 — только этот ПК</option>
+                <option value="0.0.0.0">0.0.0.0 — доступен по сети</option>
+              </select>
+            </div>
+
+            <div class="settings-item">
+              <label for="setProxyAuth">Требовать логин и пароль</label>
+              <label class="switch">
+                <input type="checkbox" id="setProxyAuth">
+                <span></span>
+              </label>
+            </div>
+
+            <div class="settings-item">
+              <label for="setProxyUsername">Логин</label>
+              <input type="text" id="setProxyUsername" maxlength="64"
+                     autocomplete="off" spellcheck="false">
+            </div>
+
+            <div class="settings-item">
+              <label for="setProxyPassword">Пароль</label>
+              <input type="text" id="setProxyPassword" maxlength="256"
+                     autocomplete="off" spellcheck="false">
+            </div>
+
+            <div class="settings-actions">
+              <button type="button" class="btn-cancel"
+                      onclick="regenerateProxyPassword()">Сгенерировать новый пароль</button>
+            </div>
+
+            <div class="settings-hint" id="proxyHint"></div>
+            <div class="settings-hint" id="proxyApplyHint">
+              Изменения прокси применятся при следующем подключении.
             </div>
           </div>
         </div>
@@ -2022,6 +2115,10 @@
       ping_url:                       [['setPingUrl', 'url']],
       ping_timeout:                   [['setPingTimeout', 'int']],
       ping_concurrency:               [['setPingConcurrency', 'int']],
+      proxy_listen:                   [['qProxyListen', 'value'], ['setProxyListen', 'value']],
+      proxy_auth_enabled:             [['qProxyAuth', 'checked'], ['setProxyAuth', 'checked']],
+      proxy_username:                 [['setProxyUsername', 'value']],
+      proxy_password:                 [['setProxyPassword', 'value']],
     };
 
     function applySettingValue(key, value) {
@@ -2054,6 +2151,9 @@
             }
             applySettingValue(key, value);
             sendSetting(key, value);
+            if (key === 'proxy_listen' || key === 'proxy_auth_enabled') {
+              updateProxyHint();
+            }
           });
         });
       });
@@ -2091,6 +2191,58 @@
       });
     }
 
+    function updateProxyHint() {
+      const listenEl = document.getElementById('setProxyListen');
+      const authEl = document.getElementById('setProxyAuth');
+      const listen = listenEl ? listenEl.value : '127.0.0.1';
+      const auth = authEl ? authEl.checked : true;
+
+      let text = '';
+      if (!auth) {
+        text = 'Внимание: прокси без пароля. Любой, кто видит порт, может им пользоваться.';
+      }
+      if (listen === '0.0.0.0') {
+        text += (text ? ' ' : '') +
+          'Прокси доступен другим устройствам в локальной сети.';
+      }
+      if (!text) {
+        text = 'Прокси слушает только этот компьютер и требует логин/пароль.';
+      }
+
+      ['qProxyHint', 'proxyHint'].forEach(id => {
+        const hint = document.getElementById(id);
+        if (!hint) return;
+        hint.textContent = text;
+        hint.classList.toggle('warn', !auth || listen === '0.0.0.0');
+      });
+    }
+
+    function regenerateProxyPassword() {
+      sendToPython({ action: "regenerate_proxy_password" });
+    }
+
+    window.showProxyWarning = function(message) {
+      const el = document.getElementById('proxyWarningText');
+      if (el) el.textContent = message || 'Прокси настроен небезопасно.';
+      document.getElementById('proxyWarningModal').style.display = 'flex';
+    };
+
+    function closeProxyWarning() {
+      document.getElementById('proxyWarningModal').style.display = 'none';
+    }
+
+    function cancelProxyWarning() {
+      closeProxyWarning();
+      if (window.ObxodCube) window.ObxodCube.setBusy(false);
+      window.setUiBusy(false);
+      sendToPython({ action: "cancel_toggle" });
+    }
+
+    function continueProxyWarning() {
+      closeProxyWarning();
+      sendToPython({ action: "toggle_connection", force_insecure: true });
+    }
+
     window.setRoutingSets = function(sets, active) {
       ['qRoutingSet', 'setRoutingSet'].forEach(id => {
         const el = document.getElementById(id);
@@ -2126,6 +2278,11 @@
       applySettingValue('ping_url',                        cfg.ping_url || '');
       applySettingValue('ping_timeout',                    cfg.ping_timeout ?? 5);
       applySettingValue('ping_concurrency',                cfg.ping_concurrency ?? 8);
+      applySettingValue('proxy_listen',                    cfg.proxy_listen || '127.0.0.1');
+      applySettingValue('proxy_auth_enabled',              cfg.proxy_auth_enabled !== false);
+      applySettingValue('proxy_username',                  cfg.proxy_username || 'obxod');
+      applySettingValue('proxy_password',                  cfg.proxy_password || '');
+      updateProxyHint();
 
       const rs = document.getElementById('setRoutingSet');
       if (rs && rs.options.length > 0) {

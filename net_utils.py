@@ -497,6 +497,50 @@ def apply_mode_to_config(xray_config: dict, mode: str, physical_iface: str | Non
 
     return cfg
 
+
+PROXY_INBOUND_PROTOS = frozenset({"socks", "http", "mixed"})
+
+
+def apply_proxy_security(
+    config: dict,
+    *,
+    listen: str = "127.0.0.1",
+    auth_enabled: bool = True,
+    username: str = "obxod",
+    password: str = "",
+) -> dict:
+    """Закрывает локальные прокси-инбаунды паролем и задаёт адрес прослушивания.
+
+    Пароль применяется к socks/mixed через `auth` + `accounts`, к http —
+    только через `accounts` (у HTTP-инбаунда нет поля auth).
+    """
+    if listen not in ("127.0.0.1", "0.0.0.0"):
+        listen = "127.0.0.1"
+
+    for ib in config.get("inbounds") or []:
+        proto = (ib.get("protocol") or "").lower()
+        if proto not in PROXY_INBOUND_PROTOS:
+            continue
+
+        ib["listen"] = listen
+        settings = ib.get("settings")
+        if not isinstance(settings, dict):
+            settings = {}
+            ib["settings"] = settings
+
+        if proto in ("socks", "mixed"):
+            settings["auth"] = "password" if auth_enabled else "noauth"
+        else:
+            # HTTP-инбаунд не использует поле auth: пустой accounts = без пароля.
+            settings.pop("auth", None)
+
+        if auth_enabled and username and password:
+            settings["accounts"] = [{"user": username, "pass": password}]
+        else:
+            settings.pop("accounts", None)
+
+    return config
+
 # ══════════════════════════════════════════════════════════════════════
 # ПРЕСЕТЫ МАРШРУТИЗАЦИИ (cfg/routing/*.json)
 # ══════════════════════════════════════════════════════════════════════

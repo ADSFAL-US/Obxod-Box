@@ -28,6 +28,7 @@ from pathlib import Path
 
 from net_utils import (
     apply_mode_to_config,
+    apply_proxy_security,
     apply_routing_to_config,
     download_geofiles,
     download_wintun,
@@ -503,6 +504,23 @@ class XrayManager:  # pylint: disable=too-many-public-methods
                 logger.warning(
                     "Пресет %r не найден — работаю без маршрутизации", routing_set,
                 )
+
+        proxy_listen = str(self.app.config.get("proxy_listen", "127.0.0.1"))
+        proxy_auth = bool(self.app.config.get("proxy_auth_enabled", True))
+        proxy_user = str(self.app.config.get("proxy_username", "obxod"))
+        proxy_pass = str(self.app.config.get("proxy_password", ""))
+        runtime = apply_proxy_security(
+            runtime,
+            listen=proxy_listen,
+            auth_enabled=proxy_auth,
+            username=proxy_user,
+            password=proxy_pass,
+        )
+        if mode in ("proxy", "both"):
+            logger.info(
+                "Прокси: listen=%s, auth=%s, user=%r",
+                proxy_listen, "on" if proxy_auth else "off", proxy_user,
+            )
 
         runtime["log"] = {
             "access": "none",

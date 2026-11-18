@@ -247,6 +247,18 @@ class MainWindow:
             "ping_url": lambda v: isinstance(v, str) and v.lower().startswith(("http://", "https://")) and len(v) < 2048,
             "ping_timeout": lambda v: isinstance(v, int) and 1 <= v <= 30,
             "ping_concurrency": lambda v: isinstance(v, int) and 1 <= v <= 20,
+            "proxy_auth_enabled": lambda v: isinstance(v, bool),
+            "proxy_listen": lambda v: v in ("127.0.0.1", "0.0.0.0"),
+            "proxy_username": lambda v: (
+                isinstance(v, str)
+                and 0 < len(v.strip()) <= 64
+                and not any(ord(c) < 32 for c in v)
+            ),
+            "proxy_password": lambda v: (
+                isinstance(v, str)
+                and 8 <= len(v) <= 256
+                and not any(ord(c) < 32 for c in v)
+            ),
             "routing_set": lambda v: v is None or (
                 isinstance(v, str)
                 and 0 < len(v) <= 100
@@ -1126,7 +1138,13 @@ class MainWindow:
         elif action == "select_config":
             asyncio.create_task(self._handle_config_selection(msg.get("index")))
         elif action == "toggle_connection":
-            asyncio.create_task(self._handle_toggle_connection())
+            asyncio.create_task(
+                self._handle_toggle_connection(bool(msg.get("force_insecure")))
+            )
+        elif action == "cancel_toggle":
+            asyncio.create_task(self._release_ui_busy())
+        elif action == "regenerate_proxy_password":
+            asyncio.create_task(self._handle_regenerate_proxy_password())
         elif action == "update_setting":
             asyncio.create_task(
                 self._handle_update_setting(msg.get("key"), msg.get("value"))
@@ -1716,6 +1734,10 @@ class MainWindow:
             "ping_url":                        self.config.get("ping_url", DEFAULT_PING_URL),
             "ping_timeout":                    self.config.get("ping_timeout", 5),
             "ping_concurrency":                self.config.get("ping_concurrency", 8),
+            "proxy_auth_enabled":              bool(self.config.get("proxy_auth_enabled", True)),
+            "proxy_listen":                    self.config.get("proxy_listen", "127.0.0.1"),
+            "proxy_username":                  self.config.get("proxy_username", "obxod"),
+            "proxy_password":                  self.config.get("proxy_password", ""),
             "routing_set":                     self.config.get("routing_set"),
             "auto_update_enabled":             bool(self.config.get("auto_update_enabled", True)),
         }
@@ -1824,7 +1846,42 @@ class MainWindow:
     # ------------------------------------------------------------------
     # Кнопка подключения (куб)
     # ------------------------------------------------------------------
-    async def _handle_toggle_connection(self) -> None:
+    def _proxy_insecure_warning(self) -> str | None:
+        """Предупреждение перед подключением, если прокси небезопасен."""
+        if self.config.mode not in ("proxy", "both"):
+            return None
+
+        problems: list[str] = []
+        if not bool(self.config.get("proxy_auth_enabled", True)):
+            problems.append(
+                "Прокси работает без логина и пароля — им может воспользоваться "
+                "любой, кто видит порт."
+            )
+        if str(self.config.get("proxy_listen", "127.0.0.1")) == "0.0.0.0":
+            problems.append(
+                "Прокси слушает 0.0.0.0 и доступен другим устройствам в сети."
+            )
+        if not problems:
+            return None
+        return (
+            " ".join(problems)
+            + " Изменить это можно в настройках → Прокси. Подключиться всё равно?"
+        )
+
+    async def _show_proxy_warning(self, message: str) -> None:
+        js = (
+            "window.showProxyWarning && window.showProxyWarning("
+            + json.dumps(message, ensure_ascii=False)
+            + ");"
+        )
+        await self._push_js_safe(js)
+
+    async def _handle_regenerate_proxy_password(self) -> None:
+        self.config.regenerate_proxy_password()
+        logger.info("Сгенерирован новый пароль прокси")
+        await self._push_settings()
+
+    async def _handle_toggle_connection(self, force_insecure: bool = False) -> None:
         if self._toggle_lock.locked():
             return
         async with self._toggle_lock:
@@ -1853,6 +1910,13 @@ class MainWindow:
                     self._want_xray_running = True
                     self.xray_manager.set_network_down()
                     return
+
+                if not force_insecure:
+                    warning = self._proxy_insecure_warning()
+                    if warning:
+                        logger.info("Toggle: показано предупреждение о прокси")
+                        await self._show_proxy_warning(warning)
+                        return
 
                 logger.info("Toggle: запускаю Xray с конфигом id=%s", record["id"])
                 self._want_xray_running = True

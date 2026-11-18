@@ -460,9 +460,13 @@ def run_diagnostics(
     # 3. TUN-интерфейс и маршруты.
     ifaces = _interface_names()
     tun_ifaces = [name for name in ifaces if _is_tun_name(name)]
+    own_tun_ifaces = [
+        name for name in tun_ifaces
+        if "obxod" in name.lower() or TUN_INTERFACE_NAME.lower() in name.lower()
+    ]
     expected_tun = mode in ("tun", "both")
     if expected_tun and running:
-        if not tun_ifaces:
+        if not own_tun_ifaces:
             issues.append(DiagnosticIssue(
                 code="tun_missing",
                 severity="error",
@@ -476,18 +480,20 @@ def run_diagnostics(
                     "Если уже есть другой VPN/TUN — завершите его."
                 ),
             ))
-        elif not any(ifaces.get(name) for name in tun_ifaces):
+        elif not any(ifaces.get(name) for name in own_tun_ifaces):
             issues.append(DiagnosticIssue(
                 code="tun_down",
                 severity="error",
                 title="TUN-интерфейс не поднят",
-                detail=f"Интерфейс {', '.join(tun_ifaces)} существует, но выключен.",
+                detail=f"Интерфейс {', '.join(own_tun_ifaces)} существует, но выключен.",
                 suggestion="Переподключитесь. Если не помогает — проверьте права и лог Xray.",
             ))
 
     other_vpn_ifaces = [
         name for name, up in ifaces.items()
-        if up and _is_vpn_iface(name) and not _is_tun_name(name)
+        if up and _is_vpn_iface(name)
+        and not _is_tun_name(name)
+        and name not in own_tun_ifaces
     ]
     if other_vpn_ifaces:
         issues.append(DiagnosticIssue(
@@ -503,10 +509,11 @@ def run_diagnostics(
 
     default_devices = _default_route_devices()
     if expected_tun and running and default_devices:
-        tun_lower = {name.lower() for name in tun_ifaces}
+        tun_lower = {name.lower() for name in own_tun_ifaces}
         tun_default = [
             dev for dev in default_devices
-            if dev.lower() in tun_lower or _is_tun_name(dev)
+            if dev.lower() in tun_lower
+            or (not own_tun_ifaces and _is_tun_name(dev))
         ]
         if not tun_default:
             issues.append(DiagnosticIssue(

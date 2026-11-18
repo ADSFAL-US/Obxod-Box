@@ -1307,6 +1307,12 @@ class MainWindow:
                 lambda: (self.xray_manager.status, self.xray_manager.status_message)
             )
             await self._push_xray_status(status, msg)
+            if self._last_diagnostics:
+                await self._push_js_safe(
+                    "window.showDiagnostics && window.showDiagnostics("
+                    + json.dumps(self._last_diagnostics, ensure_ascii=False)
+                    + ");"
+                )
         except Exception as e:
             logger.debug("_repush_state failed: %s", e)
 
@@ -1457,23 +1463,23 @@ class MainWindow:
                 )
                 if cur != last:
                     prev = last
+                    prev_status = prev[0] if prev is not None else None
                     last = cur
                     await self._push_xray_status(*cur)
 
                     if (
                         cur[0] == "running"
-                        and (prev is None or prev[0] != "running")
+                        and prev_status != "running"
                         and not self._is_hidden_to_tray
                     ):
                         asyncio.create_task(self._run_diagnostics("connected"))
                     elif (
                         cur[0] == "error"
-                        and prev is not None
-                        and prev[0] in ("running", "starting", "stopping")
+                        and prev_status in ("running", "starting", "stopping")
                     ):
                         title = (
                             "Не удалось подключиться"
-                            if prev[0] == "starting"
+                            if prev_status == "starting"
                             else "Соединение разорвано"
                         )
                         asyncio.create_task(
@@ -1506,19 +1512,31 @@ class MainWindow:
         except Exception as e:
             logger.debug("release ui busy status: %s", e)
 
-    async def _notify_connection_lost(self, message: str, title: str) -> None:
-        # Если окно свёрнуто в трей, JS-модалку никто не увидит — показываем
-        # системное уведомление. В видимом окне дополнительно откроем диалог.
+    def _notify_user(self, title: str, message: str) -> None:
+        """Системное уведомление через трей. Вызывать из UI-потока."""
+        tray = self._tray_backend
+        if tray is None or not hasattr(tray, "notify"):
+            return
         try:
-            tray = self._tray_backend
-            if tray is not None and hasattr(tray, "notify"):
-                tray.notify(title, message or "Соединение с Xray завершилось")
+            # WinForms требует вызова из UI-потока, а notify-send на Linux
+            # запускается неблокирующим Popen — поэтому зовём напрямую.
+            tray.notify(title, message)
         except Exception as e:
             logger.debug("tray notify failed: %s", e)
 
+    async def _notify_connection_lost(self, message: str, title: str) -> None:
+        # Если окно свёрнуто в трей, JS-модалку никто не увидит — показываем
+        # системное уведомление. В видимом окне дополнительно откроем диалог.
+        text = message or "Соединение с Xray завершилось"
+        for prefix in ("Соединение разорвано: ", "Соединение не установлено: "):
+            if text.startswith(prefix):
+                text = text[len(prefix):]
+                break
+        self._notify_user(title, text)
+
         js = (
             "window.showConnectionLost && window.showConnectionLost("
-            + json.dumps(message or "", ensure_ascii=False) + ", "
+            + json.dumps(text, ensure_ascii=False) + ", "
             + json.dumps(title, ensure_ascii=False)
             + ");"
         )
@@ -1536,6 +1554,12 @@ class MainWindow:
                 # TUN/маршруты иногда появляются через мгновение после
                 # формального «running». Даём стеку шанс стабилизироваться.
                 await asyncio.sleep(1.2)
+                status = await asyncio.to_thread(lambda: self.xray_manager.status)
+                if status != "running":
+                    logger.info(
+                        "Диагностика отменена: статус сменился на %s", status
+                    )
+                    return
             url = str(self.config.get("ping_url", DEFAULT_PING_URL))
             timeout = float(self.config.get("ping_timeout", 5))
             try:
@@ -1577,6 +1601,11 @@ class MainWindow:
                 result.get("ok"), result.get("traffic_ok"),
                 len(result.get("issues") or []),
             )
+            if result.get("issues") and self._is_hidden_to_tray:
+                self._notify_user(
+                    "Диагностика сети",
+                    str(result.get("summary") or "Обнаружены проблемы с сетью"),
+                )
             js = (
                 "window.showDiagnostics && window.showDiagnostics("
                 + json.dumps(result, ensure_ascii=False)
@@ -1625,7 +1654,6 @@ class MainWindow:
             logger.warning("open_url: отклонён URL %r", url)
             return
         try:
-            import webbrowser
             await asyncio.to_thread(webbrowser.open, url)
         except Exception as e:
             logger.warning("open_url failed: %s", e)
@@ -2579,6 +2607,7 @@ class MainWindow:
 
             record = self._loaded_configs[index]
             name = record["meta"].get("name") or f"Config #{index}"
+            old_id = self.config.get("active_config_id")
 
             self.config.set("active_config_id", record["id"])
             self.config.save()
@@ -2592,6 +2621,10 @@ class MainWindow:
                 self._loaded_configs,
                 index,
             )
+
+            if old_id == record["id"]:
+                logger.info("Активный конфиг не изменился — перезапуск не нужен")
+                return
 
             running = await asyncio.to_thread(lambda: self.xray_manager.is_running)
             if not running:

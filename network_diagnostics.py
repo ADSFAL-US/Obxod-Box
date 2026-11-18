@@ -28,6 +28,8 @@ try:
 except ImportError:  # pragma: no cover
     psutil = None
 
+from xray_errors import describe_exit_code
+
 logger = logging.getLogger(__name__)
 
 ISSUES_URL = "https://github.com/ADSFAL-US/Obxod-Box/issues/new"
@@ -226,6 +228,16 @@ def _collect_interfering_processes(own_pids: set[int]) -> list[dict[str, Any]]:
     return found
 
 
+def _killable_owner(owner: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Возвращаем процесс в UI только если его реально можно завершить."""
+    if not owner:
+        return []
+    name = str(owner.get("name") or "")
+    if _known_process_reason(name, "") is None:
+        return []
+    return [owner]
+
+
 def _port_owner(port: int) -> dict[str, Any] | None:
     if psutil is None:
         return None
@@ -239,7 +251,7 @@ def _port_owner(port: int) -> dict[str, Any] | None:
         try:
             if not conn.laddr or conn.laddr.port != port:
                 continue
-            if conn.status not in (psutil.CONN_LISTEN, psutil.CONN_ESTABLISHED):
+            if conn.status != psutil.CONN_LISTEN:
                 continue
             pid = int(conn.pid or 0)
             if not pid:
@@ -366,7 +378,18 @@ def run_diagnostics(
     config  — app.config (mode/ping_url/ping_timeout).
     """
     issues: list[DiagnosticIssue] = []
-    mode = str(getattr(config, "mode", "proxy") or "proxy").lower()
+
+    def cfg_get(key: str, default):
+        getter = getattr(config, "get", None)
+        if callable(getter):
+            return getter(key, default)
+        return getattr(config, key, default)
+
+    mode = str(
+        getattr(config, "mode", None)
+        or cfg_get("mode", "proxy")
+        or "proxy"
+    ).lower()
     runtime = dict(getattr(manager, "runtime_config", {}) or {})
     xray = dict(getattr(manager, "xray_status", {}) or {})
     running = bool(xray.get("running"))
@@ -375,12 +398,6 @@ def run_diagnostics(
     xray_pid = xray.get("pid")
     if isinstance(xray_pid, int):
         own_pids.add(xray_pid)
-
-    def cfg_get(key: str, default):
-        getter = getattr(config, "get", None)
-        if callable(getter):
-            return getter(key, default)
-        return getattr(config, key, default)
 
     url = str(probe_url or cfg_get("ping_url", DEFAULT_PROBE_URL))
     if not url.lower().startswith(("http://", "https://")):
@@ -391,15 +408,17 @@ def run_diagnostics(
     # 1. Жив ли сам Xray.
     if not running:
         if exit_code is not None:
+            reason = describe_exit_code(exit_code)
             issues.append(DiagnosticIssue(
                 code="xray_exited",
                 severity="error",
-                title="Xray завершился",
-                detail=f"Процесс Xray остановился с кодом {exit_code}.",
-                suggestion=(
-                    "Нажмите «Проверить снова» после переподключения. Если ошибка "
-                    "повторяется — приложите лог Xray к issue."
+                title=reason.title,
+                detail=reason.detail,
+                suggestion=reason.suggestion or (
+                    "Нажмите «Проверить снова» после переподключения."
                 ),
+                known=reason.known,
+                issue_url=None if reason.known else ISSUES_URL,
             ))
         else:
             issues.append(DiagnosticIssue(
@@ -425,7 +444,7 @@ def run_diagnostics(
             for port in ports:
                 if not _port_open(port):
                     owner = _port_owner(port)
-                    processes = [owner] if owner else []
+                    processes = _killable_owner(owner)
                     issues.append(DiagnosticIssue(
                         code="proxy_port_closed",
                         severity="error",
@@ -456,7 +475,7 @@ def run_diagnostics(
                                 f"(pid {owner['pid']}), а не Xray."
                             ),
                             suggestion="Завершите этот процесс — он может перехватывать трафик.",
-                            processes=[owner],
+                            processes=_killable_owner(owner),
                         ))
 
     # 3. TUN-интерфейс и маршруты.

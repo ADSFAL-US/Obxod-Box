@@ -36,6 +36,7 @@ from net_utils import (
     load_routing_set,
     xray_binary_name,
 )
+from xray_errors import describe_exit_code
 
 logger = logging.getLogger(__name__)
 
@@ -213,7 +214,7 @@ class SupervisorClient:
         return self._send({"cmd": "quit"})
 
 
-class XrayManager:
+class XrayManager:  # pylint: disable=too-many-public-methods
     def __init__(self, app):
         self.app = app
         self.cfg_path = Path(__file__).resolve().parent / "cfg" / "x-ray_conf.json"
@@ -773,9 +774,10 @@ class XrayManager:
         self._current_inbound_ports = []
         self._current_had_tun = False
         self._runtime_config = {}
+        reason = describe_exit_code(rc)
         self._set_status(
             STATUS_ERROR,
-            f"Соединение разорвано: Xray завершился (код {rc})",
+            f"Соединение разорвано: {reason.status_message}",
         )
 
     @property
@@ -930,10 +932,11 @@ class XrayManager:
                                 self._current_inbound_ports = []
                                 self._current_had_tun = False
                                 self._runtime_config = {}
+                                reason = describe_exit_code(rc)
                                 self._set_status(
                                     STATUS_ERROR,
                                     f"Соединение не установлено: "
-                                    f"Xray завершился (код {rc})",
+                                    f"{reason.status_message}",
                                 )
                                 return
                     except Exception as exc:

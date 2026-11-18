@@ -360,12 +360,12 @@ class LinuxTray:
 
             if not shutil.which("notify-send"):
                 return
-            subprocess.run(
+            # Popen, а не run: уведомление не должно блокировать event loop.
+            subprocess.Popen(
                 ["notify-send", title, message],
-                check=False,
-                timeout=5,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
+                start_new_session=True,
             )
             logger.info("Tray notify: %s — %s", title, message)
         except Exception as exc:

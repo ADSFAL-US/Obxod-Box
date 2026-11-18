@@ -1460,7 +1460,11 @@ class MainWindow:
                     last = cur
                     await self._push_xray_status(*cur)
 
-                    if cur[0] == "running" and (prev is None or prev[0] != "running"):
+                    if (
+                        cur[0] == "running"
+                        and (prev is None or prev[0] != "running")
+                        and not self._is_hidden_to_tray
+                    ):
                         asyncio.create_task(self._run_diagnostics("connected"))
                     elif (
                         cur[0] == "error"

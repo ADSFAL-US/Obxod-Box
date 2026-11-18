@@ -25,6 +25,7 @@
   const STATUS_LABELS = {
     stopped: "Нажмите на куб для подключения",
     starting: "Подключение...",
+    stopping: "Отключение...",
     running: "Подключено",
     error: "Ошибка",
     network_down: "Нет сети — ждём подключения...",
@@ -48,6 +49,14 @@
   let activeAccentName = null;
   /** @type {null|((e: Event) => void)} */
   let toggleHandler = null;
+
+  // Оптимистичный отклик: блокируем куб/тоггл до ответа ядра.
+  const BUSY_TIMEOUT_MS = 30000;
+  let busy = false;
+  /** @type {'running'|'stopped'|'external'|null} */
+  let pendingTarget = null;
+  /** @type {ReturnType<typeof setTimeout>|null} */
+  let busyTimer = null;
 
   // idle look-at
   const target = { x: 0, y: 0 };

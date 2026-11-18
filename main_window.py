@@ -1522,6 +1522,10 @@ class MainWindow:
             self._diagnostics_generation += 1
             gen = self._diagnostics_generation
             logger.info("Запуск диагностики сети: %s", reason)
+            if reason == "connected":
+                # TUN/маршруты иногда появляются через мгновение после
+                # формального «running». Даём стеку шанс стабилизироваться.
+                await asyncio.sleep(1.2)
             url = str(self.config.get("ping_url", DEFAULT_PING_URL))
             timeout = float(self.config.get("ping_timeout", 5))
             try:

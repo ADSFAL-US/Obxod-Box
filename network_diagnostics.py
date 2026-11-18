@@ -137,11 +137,13 @@ def _port_open(port: int, timeout: float = 0.4) -> bool:
         return False
 
 
-def _inbound_ports(runtime: dict) -> list[int]:
+def _inbound_ports(runtime: dict, protocols: set[str] | None = None) -> list[int]:
     ports: list[int] = []
     for ib in runtime.get("inbounds") or []:
         proto = (ib.get("protocol") or "").lower()
         if proto in ("tun", "dokodemo-door", "tunnel", "dns"):
+            continue
+        if protocols is not None and proto not in protocols:
             continue
         port = ib.get("port")
         if isinstance(port, int):
@@ -539,32 +541,36 @@ def run_diagnostics(
             ))
 
     # 4. Реальная проверка прохождения трафика.
-    if running and mode in ("proxy", "both") and ports:
+    # urllib умеет только HTTP-прокси, поэтому SOCKS-only inbound проверяем
+    # лишь на открытый порт (выше), без ложного «трафик не проходит».
+    proxy_probe_ports = _inbound_ports(runtime, {"http", "mixed"})
+    if running and mode in ("proxy", "both") and proxy_probe_ports:
         failed: list[int] = []
-        for port in ports:
+        probe_ok = False
+        for port in proxy_probe_ports:
             if not _port_open(port):
                 continue
             try:
                 _probe_via_proxy(port, url, timeout)
+                probe_ok = True
                 break
             except Exception as exc:
                 logger.info("diagnostics: proxy port %s probe failed: %s", port, exc)
                 failed.append(port)
-        else:
-            if failed or ports:
-                issues.append(DiagnosticIssue(
-                    code="proxy_probe_failed",
-                    severity="error",
-                    title="Трафик через прокси не проходит",
-                    detail=(
-                        "Не удалось выполнить запрос через локальный прокси-порт"
-                        + (f" {failed[0]}" if failed else "") + "."
-                    ),
-                    suggestion=(
-                        "Проверьте конфиг сервера и интернет. Если ошибка повторяется "
-                        "на рабочих конфигах — приложите лог к issue."
-                    ),
-                ))
+        if not probe_ok and failed:
+            issues.append(DiagnosticIssue(
+                code="proxy_probe_failed",
+                severity="error",
+                title="Трафик через прокси не проходит",
+                detail=(
+                    "Не удалось выполнить запрос через локальный прокси-порт "
+                    f"{failed[0]}."
+                ),
+                suggestion=(
+                    "Проверьте конфиг сервера и интернет. Если ошибка повторяется "
+                    "на рабочих конфигах — приложите лог к issue."
+                ),
+            ))
 
     if running and mode in ("tun", "both"):
         try:
@@ -696,7 +702,11 @@ def kill_process(pid: int, protected_pids: set[int] | None = None) -> tuple[bool
     except (psutil.Error, OSError) as exc:
         return False, f"Не удалось прочитать процесс: {exc}"
 
-    if _known_process_reason(f"{name} {proc.exe()}", cmdline) is None:
+    try:
+        exe = proc.exe()
+    except (psutil.Error, OSError):
+        exe = ""
+    if _known_process_reason(f"{name} {exe}", cmdline) is None:
         return False, "Процесс не похож на известный VPN/прокси — не трогаем"
 
     try:

@@ -1464,11 +1464,18 @@
 
     let uiBusy = false;
 
-    // Единая блокировка куба/тоггла на время ответа ядра.
-    window.setUiBusy = function(busy, label) {
+    function applyUiBusy(busy) {
       uiBusy = !!busy;
       const wrapper = document.querySelector('.toggle-wrapper');
       if (wrapper) wrapper.classList.toggle('busy', uiBusy);
+    }
+
+    // Куб сообщает о внутренней оптимистичной блокировке (включая timeout).
+    window.obxodUiBusyChanged = applyUiBusy;
+
+    // Единая блокировка куба/тоггла на время ответа ядра.
+    window.setUiBusy = function(busy, label) {
+      applyUiBusy(busy);
       if (window.ObxodCube && window.ObxodCube.setBusy) {
         window.ObxodCube.setBusy(uiBusy);
       }

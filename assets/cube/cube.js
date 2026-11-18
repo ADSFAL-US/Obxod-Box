@@ -305,6 +305,15 @@
     if (document.body) {
       document.body.classList.toggle("toggle-busy", !!on);
     }
+    // Внешний shell синхронизирует uiBusy/класс тоггла, в том числе
+    // когда блокировка снялась по таймауту.
+    if (typeof global.obxodUiBusyChanged === "function") {
+      try {
+        global.obxodUiBusyChanged(!!on);
+      } catch (e) {
+        console.warn("obxodUiBusyChanged failed:", e);
+      }
+    }
   }
 
   function finishPending() {

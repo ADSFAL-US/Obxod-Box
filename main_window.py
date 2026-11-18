@@ -1449,12 +1449,9 @@ class MainWindow:
         last: tuple[str, str] | None = None
         while True:
             try:
-                # Не трогаем WebView, пока окно в трее — иначе evaluate_javascript
-                # после Hide() может зависнуть и оставить UI «inactive» при restore.
-                if self._is_hidden_to_tray:
-                    await asyncio.sleep(1.2)
-                    continue
-                # status/message — socket I/O к supervisor'у, уводим в поток.
+                # Статус опрашиваем всегда: даже в трее нужно узнать, что
+                # Xray упал, и показать уведомление. JS-пуш сам пропускается,
+                # пока окно скрыто.
                 cur = await asyncio.to_thread(
                     lambda: (self.xray_manager.status, self.xray_manager.status_message)
                 )
@@ -1506,6 +1503,15 @@ class MainWindow:
             logger.debug("release ui busy status: %s", e)
 
     async def _notify_connection_lost(self, message: str, title: str) -> None:
+        # Если окно свёрнуто в трей, JS-модалку никто не увидит — показываем
+        # системное уведомление. В видимом окне дополнительно откроем диалог.
+        try:
+            tray = self._tray_backend
+            if tray is not None and hasattr(tray, "notify"):
+                tray.notify(title, message or "Соединение с Xray завершилось")
+        except Exception as e:
+            logger.debug("tray notify failed: %s", e)
+
         js = (
             "window.showConnectionLost && window.showConnectionLost("
             + json.dumps(message or "", ensure_ascii=False) + ", "

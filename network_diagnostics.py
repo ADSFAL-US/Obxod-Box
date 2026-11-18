@@ -492,7 +492,6 @@ def run_diagnostics(
     other_vpn_ifaces = [
         name for name, up in ifaces.items()
         if up and _is_vpn_iface(name)
-        and not _is_tun_name(name)
         and name not in own_tun_ifaces
     ]
     if other_vpn_ifaces:

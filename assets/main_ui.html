@@ -1110,28 +1110,6 @@
         </div>
 
         <div class="settings-section">
-          <div class="settings-section-title">Прокси</div>
-
-          <div class="settings-item">
-            <label for="qProxyListen">Слушать</label>
-            <select id="qProxyListen">
-              <option value="127.0.0.1">127.0.0.1 — только этот ПК</option>
-              <option value="0.0.0.0">0.0.0.0 — доступен по сети</option>
-            </select>
-          </div>
-
-          <div class="settings-item">
-            <label for="qProxyAuth">Требовать логин и пароль</label>
-            <label class="switch">
-              <input type="checkbox" id="qProxyAuth">
-              <span></span>
-            </label>
-          </div>
-
-          <div class="settings-hint" id="qProxyHint"></div>
-        </div>
-
-        <div class="settings-section">
           <div class="settings-section-title">Автообновления</div>
 
           <div class="settings-item">
@@ -2115,8 +2093,8 @@
       ping_url:                       [['setPingUrl', 'url']],
       ping_timeout:                   [['setPingTimeout', 'int']],
       ping_concurrency:               [['setPingConcurrency', 'int']],
-      proxy_listen:                   [['qProxyListen', 'value'], ['setProxyListen', 'value']],
-      proxy_auth_enabled:             [['qProxyAuth', 'checked'], ['setProxyAuth', 'checked']],
+      proxy_listen:                   [['setProxyListen', 'value']],
+      proxy_auth_enabled:             [['setProxyAuth', 'checked']],
       proxy_username:                 [['setProxyUsername', 'value']],
       proxy_password:                 [['setProxyPassword', 'value']],
     };
@@ -2209,12 +2187,11 @@
         text = 'Прокси слушает только этот компьютер и требует логин/пароль.';
       }
 
-      ['qProxyHint', 'proxyHint'].forEach(id => {
-        const hint = document.getElementById(id);
-        if (!hint) return;
+      const hint = document.getElementById('proxyHint');
+      if (hint) {
         hint.textContent = text;
         hint.classList.toggle('warn', !auth || listen === '0.0.0.0');
-      });
+      }
     }
 
     function regenerateProxyPassword() {

@@ -17,12 +17,13 @@ import os
 import random
 import re
 import socket
+import ssl
 import statistics
 import subprocess
 import sys
 import threading
 import time
-import urllib.request
+import urllib.parse
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -59,12 +60,23 @@ PING_PORT_RANGE: tuple[int, int] = (20000, 40000)
 PING_USER_AGENT = "obxod-box/ping"
 PING_INBOUND_TAG = "obxod-ping-in"
 
-# Первый запрос только прогревает TLS/туннель и DNS — его время не считаем.
-# Затем берём несколько замеров и отдаём медиану: одиночный выброс не должен
-# превращать рабочий конфиг в «плохой».
-PING_WARMUP_ATTEMPTS = 2
-PING_SAMPLES = 3
-PING_SAMPLE_PAUSE = 0.12
+# Пинг должен измерять задержку туннеля, а не установку соединений.
+# Поэтому первый запрос прогревает соединение (CONNECT/TLS/DNS на выходе),
+# а замеры идут по этому же keep-alive сокету: один запрос — один RTT.
+# Из нескольких замеров берём медиану, чтобы выброс не портил цифру.
+PING_WARMUP_ATTEMPTS = 3
+PING_SAMPLES = 5
+PING_SAMPLE_PAUSE = 0.15
+
+PING_METHODS = ("http", "tcp", "icmp")
+PING_MEASURES = ("response", "handshake")
+PING_AGGREGATES = ("median", "mean", "max")
+
+# Порог зелёного в UI. По нему же нормируется score сервера.
+# Пороги намеренно мягкие: реальный туннель почти всегда даёт всплески,
+# и красным должен становиться только явно плохой сервер.
+PING_GREEN_MS = 120.0
+PING_GREEN_JITTER_MS = 40.0
 
 MAX_LOG_SIZE_BYTES = 5 * 1024 * 1024
 KEEP_TAIL_BYTES    = 512 * 1024
@@ -127,6 +139,158 @@ def _pick_supervisor_port() -> int:
     return random.randint(lo, hi)
 
 
+def normalize_ping_options(options: dict | None) -> dict:
+    """Приводит настройки пинга к безопасным значениям."""
+    opts = dict(options or {})
+
+    method = str(opts.get("method") or "http").lower()
+    if method not in PING_METHODS:
+        method = "http"
+    measure = str(opts.get("measure") or "response").lower()
+    if measure not in PING_MEASURES:
+        measure = "response"
+    aggregate = str(opts.get("aggregate") or "median").lower()
+    if aggregate not in PING_AGGREGATES:
+        aggregate = "median"
+
+    def clamp(value, lo: int, hi: int) -> int:
+        try:
+            return max(lo, min(hi, int(value)))
+        except (TypeError, ValueError):
+            return lo
+
+    return {
+        "method": method,
+        "measure": measure,
+        "aggregate": aggregate,
+        "warmup": bool(opts.get("warmup", True)),
+        "warmup_count": clamp(opts.get("warmup_count", PING_WARMUP_ATTEMPTS), 0, 20),
+        "samples": clamp(opts.get("samples", PING_SAMPLES), 1, 20),
+    }
+
+
+def build_ping_stats(samples: list[float], sent: int, opts: dict) -> dict:
+    """Считает итоговые метрики из успешных замеров.
+
+    Для оценки сервера берём устойчивые метрики: «пик» (второй по величине
+    замер) вместо абсолютного максимума и медианный джиттер. Одиночный
+    случайный выброс (GC, ретрай на стороне сервера) не должен превращать
+    рабочий сервер в «красный».
+    """
+    samples = [max(0.0, float(s)) for s in samples]
+    if not samples:
+        raise RuntimeError("Нет успешных замеров пинга")
+
+    aggregate = opts.get("aggregate", "median")
+    if aggregate == "mean":
+        value = statistics.fmean(samples)
+    elif aggregate == "max":
+        value = max(samples)
+    else:
+        value = statistics.median(samples)
+
+    diffs = [abs(samples[i] - samples[i - 1]) for i in range(1, len(samples))]
+    if len(diffs) >= 3:
+        jitter = statistics.median(diffs)
+    elif diffs:
+        jitter = statistics.fmean(diffs)
+    else:
+        jitter = 0.0
+
+    ordered = sorted(samples)
+    # Устойчивый «пик»: второй по величине замер. Один случайный выброс
+    # (GC, ретрай на сервере) не должен делать сервер красным, но
+    # систематически высокий пинг по-прежнему виден.
+    peak = ordered[-2] if len(ordered) >= 4 else ordered[-1]
+
+    sent = max(int(sent), len(samples))
+    return {
+        "ms": max(1, int(round(value))),
+        "samples": [round(s, 1) for s in samples],
+        "received": len(samples),
+        "sent": sent,
+        "min": max(1, int(round(min(samples)))),
+        "max": max(1, int(round(max(samples)))),
+        "peak": max(1, int(round(peak))),
+        "jitter": round(jitter, 1),
+        "method": opts.get("method", "http"),
+        "measure": opts.get("measure", "response"),
+        "aggregate": aggregate,
+    }
+
+
+def _outbound_server_address(xray_config: dict) -> str | None:
+    for ob in xray_config.get("outbounds") or []:
+        proto = str(ob.get("protocol") or "").lower()
+        if proto in ("freedom", "blackhole", "dns"):
+            continue
+        settings = ob.get("settings") or {}
+        for vnext in settings.get("vnext") or []:
+            addr = vnext.get("address")
+            if addr:
+                return str(addr)
+        for server in settings.get("servers") or []:
+            addr = server.get("address")
+            if addr:
+                return str(addr)
+    return None
+
+
+def _outbound_server_port(xray_config: dict) -> int | None:
+    for ob in xray_config.get("outbounds") or []:
+        proto = str(ob.get("protocol") or "").lower()
+        if proto in ("freedom", "blackhole", "dns"):
+            continue
+        settings = ob.get("settings") or {}
+        for vnext in settings.get("vnext") or []:
+            port = vnext.get("port")
+            if isinstance(port, int):
+                return port
+        for server in settings.get("servers") or []:
+            port = server.get("port")
+            if isinstance(port, int):
+                return port
+    return None
+
+
+def _icmp_echo(host: str, count: int, timeout: float) -> tuple[list[float], int, Exception | None]:
+    """ICMP echo через системный ping. Время берём из ответа утилиты."""
+    samples: list[float] = []
+    last_error: Exception | None = None
+    sent = 0
+    wait_ms = max(1000, int(timeout * 1000))
+    for index in range(max(1, count)):
+        sent += 1
+        if sys.platform == "win32":
+            cmd = ["ping", "-n", "1", "-w", str(wait_ms), host]
+            flags = subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
+        else:
+            cmd = ["ping", "-c", "1", "-W", str(max(1, int(timeout))), host]
+            flags = 0
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=timeout + 3,
+                creationflags=flags,
+                check=False,
+            )
+        except Exception as exc:
+            last_error = exc
+            continue
+        match = re.search(r"time[=<]\s*(\d+(?:[.,]\d+)?)\s*ms", result.stdout, re.I)
+        if not match:
+            last_error = RuntimeError(result.stdout.strip()[:200] or "нет ответа")
+            continue
+        samples.append(float(match.group(1).replace(",", ".")))
+        if index + 1 < count:
+            time.sleep(PING_SAMPLE_PAUSE)
+    return samples, sent, last_error
+
+
 def _pythonw_or_python() -> str:
     if sys.platform != "win32":
         return sys.executable
@@ -136,6 +300,182 @@ def _pythonw_or_python() -> str:
         if pythonw.exists():
             return str(pythonw)
     return str(exe)
+
+
+class _PingSession:
+    """Keep-alive HTTP-соединение через локальный Xray-прокси.
+
+    Задержка туннеля — это один round-trip «запрос → ответ». Если мерить
+    каждый запрос на новом соединении, в цифру попадают TCP-хендшейк до
+    выхода, CONNECT-ответ прокси и полный TLS-handshake, из-за чего пинг
+    завышается в разы (типично 2–3x). Поэтому рукопожатие делается один раз
+    в connect() (не в зачёт), а request() меряет только обмен по уже
+    прогретому пути. Тело ответа дочитывается, чтобы следующий замер шёл
+    по чистому сокету.
+    """
+
+    MAX_DRAIN_BYTES = 256 * 1024
+    MAX_HEAD_BYTES = 64 * 1024
+
+    def __init__(self, proxy_port: int, url: str, timeout: float):
+        parsed = urllib.parse.urlsplit(url)
+        if parsed.scheme not in ("http", "https") or not parsed.hostname:
+            raise ValueError(f"Некорректный ping-URL: {url!r}")
+        self.proxy_port = proxy_port
+        self.scheme = parsed.scheme
+        self.host = parsed.hostname
+        self.target_port = parsed.port or (443 if self.scheme == "https" else 80)
+        self.path = (parsed.path or "/") + (f"?{parsed.query}" if parsed.query else "")
+        self.timeout = timeout
+        self._sock: socket.socket | None = None
+        self._buf = b""
+
+    def close(self) -> None:
+        sock, self._sock = self._sock, None
+        self._buf = b""
+        if sock is not None:
+            try:
+                sock.close()
+            except OSError as exc:
+                logger.debug("_PingSession.close: %s", exc)
+
+    def connect(self) -> None:
+        """TCP + CONNECT + TLS. Время этого шага в пинг не попадает."""
+        self.close()
+        sock = socket.create_connection(("127.0.0.1", self.proxy_port), timeout=self.timeout)
+        sock.settimeout(self.timeout)
+        self._sock = sock
+        self._buf = b""
+        try:
+            if self.scheme == "https":
+                authority = f"{self.host}:{self.target_port}"
+                sock.sendall(
+                    (
+                        f"CONNECT {authority} HTTP/1.1\r\n"
+                        f"Host: {authority}\r\n"
+                        "Proxy-Connection: keep-alive\r\n\r\n"
+                    ).encode("ascii")
+                )
+                status, _ = self._read_head()
+                if status != 200:
+                    raise OSError(f"Xray отклонил CONNECT: HTTP {status}")
+                self._sock = ssl.create_default_context().wrap_socket(
+                    sock, server_hostname=self.host
+                )
+                self._sock.settimeout(self.timeout)
+                self._buf = b""
+        except Exception:
+            self.close()
+            raise
+
+    def request(self, measure: str = "response") -> float:
+        """Шлёт GET и возвращает время ответа в мс.
+
+        measure="response" — только обмен по прогретому соединению (пинг
+        туннеля). measure="handshake" — вместе с установкой соединения
+        (TCP/CONNECT/TLS), как его видит пользователь при первом запросе.
+        """
+        handshake = measure == "handshake"
+        t0 = time.perf_counter()
+        if handshake or self._sock is None:
+            self.connect()
+        status, headers = self._send_request()
+        elapsed_ms = (time.perf_counter() - t0) * 1000.0
+        if not self._drain_body(status, headers):
+            # Тело не дочитано — соединение грязное, следующий замер поднимет
+            # новое (это не учитывается в пинге).
+            self.close()
+        if handshake:
+            self.close()
+        return elapsed_ms
+
+    def _send_request(self) -> tuple[int, dict[bytes, bytes]]:
+        if self.scheme == "https":
+            target = self.path
+        else:
+            target = f"http://{self.host}:{self.target_port}{self.path}"
+        head = (
+            f"GET {target} HTTP/1.1\r\n"
+            f"Host: {self.host}\r\n"
+            f"User-Agent: {PING_USER_AGENT}\r\n"
+            "Accept: */*\r\n"
+            "Accept-Encoding: identity\r\n"
+            "Connection: keep-alive\r\n"
+            "Cache-Control: no-cache\r\n\r\n"
+        )
+        self._sock.sendall(head.encode("ascii"))
+        return self._read_head()
+
+    def _recv_into_buf(self, limit: int) -> bool:
+        chunk = self._sock.recv(65536)
+        if not chunk:
+            return False
+        self._buf += chunk
+        if len(self._buf) > limit:
+            raise OSError("Ответ превысил допустимый размер")
+        return True
+
+    def _read_head(self) -> tuple[int, dict[bytes, bytes]]:
+        while b"\r\n\r\n" not in self._buf:
+            if not self._recv_into_buf(self.MAX_HEAD_BYTES):
+                raise OSError("Соединение закрыто до получения ответа")
+        head, _, self._buf = self._buf.partition(b"\r\n\r\n")
+        lines = head.split(b"\r\n")
+        try:
+            status = int(lines[0].split(b" ")[1])
+        except (IndexError, ValueError):
+            raise OSError(f"Некорректный HTTP-ответ: {lines[0][:80]!r}")
+        headers: dict[bytes, bytes] = {}
+        for line in lines[1:]:
+            name, _, value = line.partition(b":")
+            headers[name.strip().lower()] = value.strip()
+        return status, headers
+
+    def _drain_body(self, status: int, headers: dict[bytes, bytes]) -> bool:
+        """Дочитывает тело, чтобы keep-alive соединение осталось чистым."""
+        if status in (204, 304) or 100 <= status < 200:
+            return True
+        if headers.get(b"transfer-encoding", b"").lower() == b"chunked":
+            return self._drain_chunked()
+        raw_len = headers.get(b"content-length")
+        if raw_len is None:
+            return False
+        try:
+            length = int(raw_len)
+        except ValueError:
+            return False
+        if length < 0 or length > self.MAX_DRAIN_BYTES:
+            return False
+        while len(self._buf) < length:
+            if not self._recv_into_buf(self.MAX_DRAIN_BYTES + 65536):
+                return False
+        self._buf = self._buf[length:]
+        return True
+
+    def _drain_chunked(self) -> bool:
+        drained = 0
+        while True:
+            while b"\r\n" not in self._buf:
+                if not self._recv_into_buf(self.MAX_DRAIN_BYTES + 65536):
+                    return False
+            line, _, self._buf = self._buf.partition(b"\r\n")
+            try:
+                size = int(line.split(b";")[0].strip() or b"0", 16)
+            except ValueError:
+                return False
+            if size == 0:
+                while b"\r\n" not in self._buf:
+                    if not self._recv_into_buf(self.MAX_DRAIN_BYTES + 65536):
+                        return False
+                _, _, self._buf = self._buf.partition(b"\r\n")
+                return True
+            drained += size
+            if drained > self.MAX_DRAIN_BYTES:
+                return False
+            while len(self._buf) < size + 2:
+                if not self._recv_into_buf(self.MAX_DRAIN_BYTES + 65536):
+                    return False
+            self._buf = self._buf[size + 2:]
 
 
 class SupervisorClient:
@@ -616,25 +956,6 @@ class XrayManager:  # pylint: disable=too-many-public-methods
         }
         return cfg
 
-    @staticmethod
-    def _http_get_via_proxy(port: int, url: str, timeout: float) -> None:
-        proxy = f"http://127.0.0.1:{port}"
-        opener = urllib.request.build_opener(
-            urllib.request.ProxyHandler({"http": proxy, "https": proxy})
-        )
-        req = urllib.request.Request(
-            url,
-            headers={
-                "User-Agent": PING_USER_AGENT,
-                "Accept": "*/*",
-                "Accept-Encoding": "identity",
-                "Connection": "close",
-                "Cache-Control": "no-cache",
-            },
-        )
-        with opener.open(req, timeout=timeout) as resp:
-            resp.read()
-
     def _spawn_ping_xray(self, xray_config: dict, timeout: float) -> tuple[subprocess.Popen, int]:
         self.ensure_xray_exe()
 
@@ -707,47 +1028,161 @@ class XrayManager:  # pylint: disable=too-many-public-methods
 
         raise RuntimeError(f"Не удалось запустить ping-xray: {last_err}")
 
-    def ping_config_sync(self, xray_config: dict, url: str, timeout: float) -> int:
+    def ping_config_sync(
+        self,
+        xray_config: dict,
+        url: str,
+        timeout: float,
+        options: dict | None = None,
+    ) -> dict:
+        opts = normalize_ping_options(options)
+        if opts["method"] in ("tcp", "icmp"):
+            return self._ping_server_direct_sync(xray_config, opts, timeout)
+
         if not url.lower().startswith(("http://", "https://")):
             raise ValueError(f"Некорректный ping-URL: {url!r}")
 
         proc, port = self._spawn_ping_xray(xray_config, timeout)
         try:
-            warmup_error: Exception | None = None
-            for attempt in range(PING_WARMUP_ATTEMPTS):
-                try:
-                    self._http_get_via_proxy(port, url, timeout)
-                    warmup_error = None
-                    break
-                except Exception as exc:
-                    warmup_error = exc
-                    if attempt + 1 < PING_WARMUP_ATTEMPTS:
-                        time.sleep(PING_SAMPLE_PAUSE)
-            if warmup_error is not None:
-                raise RuntimeError(f"Прогрев туннеля не удался: {warmup_error}")
-
-            samples: list[int] = []
-            last_error: Exception | None = None
-            for index in range(PING_SAMPLES):
-                t0 = time.perf_counter()
-                try:
-                    self._http_get_via_proxy(port, url, timeout)
-                except Exception as exc:
-                    last_error = exc
-                    continue
-                samples.append(int((time.perf_counter() - t0) * 1000))
-                if index + 1 < PING_SAMPLES:
-                    time.sleep(PING_SAMPLE_PAUSE)
-
-            if not samples:
-                raise RuntimeError(f"Все замеры пинга неудачны: {last_error}")
-            return int(statistics.median(samples))
+            samples, sent, last_error = self._ping_http_samples(port, url, opts, timeout)
         finally:
             try:
                 proc.kill()
                 proc.wait(timeout=2.0)
             except Exception as exc:
                 logger.debug("ping_config_sync: %s", exc)
+
+        if not samples:
+            raise RuntimeError(f"Все замеры пинга неудачны: {last_error}")
+        return build_ping_stats(samples, sent, opts)
+
+    # -- HTTP -----------------------------------------------------------
+    def _ping_http_samples(
+        self, port: int, url: str, opts: dict, timeout: float
+    ) -> tuple[list[float], int, Exception | None]:
+        session = _PingSession(port, url, timeout)
+        jumped = 0
+        sent = 0
+        last_error: Exception | None = None
+        samples: list[float] = []
+        measure = opts["measure"]
+        try:
+            if opts["warmup"] and opts["warmup_count"] > 0:
+                self._warmup_ping_session(session, opts["warmup_count"], timeout)
+                if measure == "handshake":
+                    # Замеры с рукопожатием поднимают соединение заново —
+                    # прогреваем только маршрут/DNS и отпускаем сокет.
+                    session.close()
+
+            for index in range(opts["samples"]):
+                sent += 1
+                try:
+                    samples.append(session.request(measure))
+                except Exception as exc:
+                    last_error = exc
+                    session.close()
+                    # Сокет мог быть закрыт сервером по keep-alive: перед
+                    # повтором греем заново, чтобы в замер не попал холодный
+                    # handshake.
+                    if measure == "response" and jumped < 1:
+                        jumped += 1
+                        try:
+                            self._warmup_ping_session(session, opts["warmup_count"], timeout)
+                            samples.append(session.request(measure))
+                        except Exception as warm_exc:
+                            last_error = warm_exc
+                if index + 1 < opts["samples"]:
+                    time.sleep(PING_SAMPLE_PAUSE)
+        finally:
+            session.close()
+        return samples, sent, last_error
+
+    # -- TCP / ICMP напрямую до сервера --------------------------------
+    def _ping_server_direct_sync(self, xray_config: dict, opts: dict, timeout: float) -> dict:
+        """Прямой TCP/ICMP до адреса сервера из конфига.
+
+        Через туннель TCP честно не измерить: Xray отвечает на CONNECT
+        раньше, чем устанавливается реальное соединение до цели. Поэтому
+        tcp/icmp меряют сеть до самого сервера, а HTTP идёт через туннель.
+        """
+        host = _outbound_server_address(xray_config)
+        if not host:
+            raise RuntimeError("Не удалось определить адрес сервера в конфиге")
+        port = _outbound_server_port(xray_config) or 443
+
+        if opts["method"] == "icmp":
+            samples, sent, last_error = _icmp_echo(host, opts["samples"], timeout)
+            if not samples:
+                raise RuntimeError(f"ICMP до {host} не отвечает: {last_error}")
+        else:
+            samples, sent, last_error = self._tcp_direct_samples(host, port, opts, timeout)
+            if not samples:
+                raise RuntimeError(f"TCP до {host}:{port} не отвечает: {last_error}")
+
+        stats = build_ping_stats(samples, sent, opts)
+        stats["target"] = f"{host}:{port}" if opts["method"] == "tcp" else host
+        return stats
+
+    @staticmethod
+    def _tcp_direct_samples(
+        host: str, port: int, opts: dict, timeout: float
+    ) -> tuple[list[float], int, Exception | None]:
+        if opts["warmup"] and opts["warmup_count"] > 0:
+            for _ in range(opts["warmup_count"]):
+                try:
+                    with socket.create_connection((host, port), timeout=timeout):
+                        pass
+                except OSError as exc:
+                    logger.debug("ping tcp warmup: %s", exc)
+                time.sleep(PING_SAMPLE_PAUSE)
+
+        samples: list[float] = []
+        sent = 0
+        last_error: Exception | None = None
+        for index in range(opts["samples"]):
+            sent += 1
+            t0 = time.perf_counter()
+            try:
+                with socket.create_connection((host, port), timeout=timeout):
+                    pass
+                samples.append((time.perf_counter() - t0) * 1000.0)
+            except OSError as exc:
+                last_error = exc
+            if index + 1 < opts["samples"]:
+                time.sleep(PING_SAMPLE_PAUSE)
+        return samples, sent, last_error
+
+    @staticmethod
+    def _warmup_ping_session(
+        session: "_PingSession", attempts: int = PING_WARMUP_ATTEMPTS, timeout: float = 5.0
+    ) -> None:
+        """Доводит туннель до прогретого состояния.
+
+        Первый connect() поднимает TCP/CONNECT/TLS до выхода и заодно
+        прогревает DNS и маршрут; повторные запросы на том же соединении
+        прогревают keep-alive на выходном узле. Пока хоть один запрос
+        заметно медленнее последующих, продолжаем греть — иначе в медиану
+        попадёт «холодный» RTT.
+        """
+        attempts = max(1, int(attempts))
+        warmup_error: Exception | None = None
+        prev: float | None = None
+        for attempt in range(attempts):
+            try:
+                elapsed = session.request()
+            except Exception as exc:
+                warmup_error = exc
+                session.close()
+                if attempt + 1 >= attempts:
+                    break
+                time.sleep(PING_SAMPLE_PAUSE)
+                continue
+            warmup_error = None
+            if prev is not None and elapsed <= prev * 1.5:
+                return
+            prev = elapsed
+        if warmup_error is not None:
+            raise RuntimeError(f"Прогрев туннеля не удался: {warmup_error}")
 
     # ------------------------------------------------------------------
     # Статус

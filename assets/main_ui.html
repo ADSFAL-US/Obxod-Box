@@ -214,6 +214,18 @@
   .active-ping.good { color: #4ade80; border-color: #2a4a34; }
   .active-ping.mid  { color: #fbbf24; border-color: #4a3d1e; }
   .active-ping.bad  { color: #ef4444; border-color: #4a2222; }
+  .active-ping .ap-text { display: block; }
+  .active-ping .ap-bar {
+    display: block;
+    height: 3px;
+    margin-top: 3px;
+    border-radius: 2px;
+    background: #4a4a4a;
+    transition: background 0.2s, width 0.2s;
+  }
+  .active-ping.good .ap-bar { background: #4ade80; }
+  .active-ping.mid  .ap-bar { background: #fbbf24; }
+  .active-ping.bad  .ap-bar { background: #ef4444; }
 
   .picker-list {
     position: absolute;
@@ -276,6 +288,26 @@
     text-overflow: ellipsis;
     line-height: 1.15;
   }
+  /* Эмодзи-флаги и молнии заменяются на инлайн-SVG (assets/flags.js). */
+  .ob-flag {
+    display: inline-block;
+    width: 1.15em;
+    height: 1.15em;
+    vertical-align: -0.18em;
+    margin-right: 0.25em;
+    border-radius: 50%;
+    overflow: hidden;
+    box-shadow: 0 0 0 1px rgba(255,255,255,0.18);
+  }
+  .ob-flag svg { display: block; width: 100%; height: 100%; }
+  .ob-bolt {
+    display: inline-block;
+    width: 1em;
+    height: 1em;
+    vertical-align: -0.15em;
+    margin: 0 0.1em;
+  }
+  .ob-bolt svg { display: block; width: 100%; height: 100%; fill: #fbbf24; }
   .picker-tags {
     flex: 0 0 auto;
     display: flex;
@@ -1289,6 +1321,74 @@
               <input type="number" id="setPingConcurrency" min="1" max="20" step="1">
             </div>
           </div>
+
+          <h3>Расширенные настройки</h3>
+          <div class="settings-section">
+            <div class="settings-item">
+              <label for="setPingMethod">Метод</label>
+              <select id="setPingMethod">
+                <option value="http">HTTP GET через туннель</option>
+                <option value="tcp">TCP-соединение через туннель</option>
+                <option value="icmp">ICMP echo (ping) до сервера</option>
+              </select>
+            </div>
+
+            <div class="settings-item">
+              <label for="setPingMeasure">Что учитывать в замере</label>
+              <select id="setPingMeasure">
+                <option value="response">Только обмен по прогретому туннелю</option>
+                <option value="handshake">Установку соединения + запрос</option>
+              </select>
+            </div>
+
+            <div class="settings-item">
+              <label for="setPingAggregate">Итоговое значение</label>
+              <select id="setPingAggregate">
+                <option value="median">Медиана</option>
+                <option value="mean">Среднее</option>
+                <option value="max">Максимум</option>
+              </select>
+            </div>
+
+            <div class="settings-item">
+              <label for="setPingWarmup">Прогревать туннель</label>
+              <label class="switch">
+                <input type="checkbox" id="setPingWarmup">
+                <span></span>
+              </label>
+            </div>
+
+            <div class="settings-item">
+              <label for="setPingWarmupCount">Запросов для прогрева</label>
+              <input type="number" id="setPingWarmupCount" min="0" max="20" step="1">
+            </div>
+
+            <div class="settings-item">
+              <label for="setPingSamples">Запросов для теста</label>
+              <input type="number" id="setPingSamples" min="1" max="20" step="1">
+            </div>
+
+            <div class="settings-item">
+              <label for="setPingGreenMs">Порог зелёного пинга (мс)</label>
+              <input type="number" id="setPingGreenMs" min="5" max="1000" step="1">
+            </div>
+
+            <div class="settings-item">
+              <label for="setPingGreenJitter">Порог зелёного джиттера (мс)</label>
+              <input type="number" id="setPingGreenJitter" min="5" max="1000" step="1">
+            </div>
+
+            <div class="settings-hint">
+              Скор сервера = (пинг_пик / порог пинга + джиттер / порог джиттера) / 2.
+              До 1 — зелёный, до 1.5 — жёлтый, выше — красный. Пинг_пик —
+              второй по величине замер, поэтому одиночный выброс не красит
+              сервер. Если пришли не все запросы — сервер всегда красный.
+            </div>
+            <div class="settings-hint" id="pingMethodHint">
+              HTTP GET идёт через туннель. TCP и ICMP меряют сеть напрямую
+              до адреса сервера из конфига (URL для них не используется).
+            </div>
+          </div>
         </div>
 
         <div class="settings-page" data-page="updates">
@@ -1638,6 +1738,7 @@
 
     let pingResults = {};
     let pingBusy = false;
+    let pingThresholds = { greenMs: 120, greenJitterMs: 40 };
 
     function escapeHtml(s) {
       const div = document.createElement('div');
@@ -1671,6 +1772,41 @@
       if (ms < 300) return 'good';
       if (ms < 800) return 'mid';
       return 'bad';
+    }
+
+    // Скор сервера: сравнивает пинг и джиттер с порогами зелёного.
+    // Полные (все запросы пришли) — по формуле; неполные — всегда «красные».
+    // score = (peak / green_ms + jitter / green_jitter) / 2
+    // peak — второй по величине замер: одиночный выброс не красит сервер.
+    function scorePing(res) {
+      if (!res || typeof res !== 'object' || !res.ms) return null;
+      const sent = res.sent || 0;
+      const received = res.received || 0;
+      const complete = sent > 0 && received >= sent;
+      if (!complete) return { score: Infinity, color: 'bad', complete: false };
+
+      const greenMs = pingThresholds.greenMs || 120;
+      const greenJit = pingThresholds.greenJitterMs || 40;
+      const peak = res.peak || res.max || res.ms;
+      const score = ((peak / greenMs) + ((res.jitter || 0) / greenJit)) / 2;
+
+      let color = 'good';
+      if (score > 1.5) color = 'bad';
+      else if (score > 1) color = 'mid';
+      return { score: score, color: color, complete: true };
+    }
+
+    function pingDisplay(res) {
+      // Возвращает {cls, txt} для списка/индикатора.
+      if (res == null) return { cls: 'bad', txt: '×' };
+      const s = scorePing(res);
+      const cls = s ? s.color : pingClass(res.ms);
+      const got = res.received;
+      const sent = res.sent;
+      const count = (typeof got === 'number' && typeof sent === 'number')
+        ? `${got}/${sent}` : '';
+      const txt = `${res.ms} ms` + (count ? ` · ${count}` : '');
+      return { cls: cls, txt: txt };
     }
 
     function renderProviderCard() {
@@ -1744,19 +1880,20 @@
           item.className = 'picker-item' + (i === selectedConfigIndex ? ' selected' : '');
 
           const has = Object.prototype.hasOwnProperty.call(pingResults, i);
-          const ms  = has ? pingResults[i] : undefined;
+          const res = has ? pingResults[i] : undefined;
           let cls, txt;
           if (!has) {
             cls = 'unknown'; txt = '—';
-          } else if (ms == null) {
+          } else if (res == null) {
             cls = 'bad'; txt = '×';
           } else {
-            cls = pingClass(ms); txt = ms + ' ms';
+            const disp = pingDisplay(res);
+            cls = disp.cls; txt = disp.txt;
           }
 
           item.innerHTML = `
             <div class="picker-info">
-              <div class="picker-name">${escapeHtml(cfg.name || ('Config #' + i))}</div>
+              <div class="picker-name">${renderName(cfg.name || ('Config #' + i))}</div>
               <div class="picker-tags">${buildTags(cfg)}</div>
             </div>
             <div class="picker-ping ${cls}">${txt}</div>
@@ -2026,8 +2163,8 @@
       if (pickerMode === 'config') renderList();
     };
 
-    window.setPingResult = function(index, ms) {
-      pingResults[index] = ms;
+    window.setPingResult = function(index, res) {
+      pingResults[index] = res;
       if (pickerMode === 'config') renderList();
       updateActivePing();
     };
@@ -2038,18 +2175,30 @@
       const has = Object.prototype.hasOwnProperty.call(pingResults, selectedConfigIndex);
       if (selectedConfigIndex < 0 || !has) {
         el.classList.remove('visible', 'good', 'mid', 'bad');
+        el.innerHTML = '';
         return;
       }
-      const ms = pingResults[selectedConfigIndex];
+      const res = pingResults[selectedConfigIndex];
       el.classList.add('visible');
       el.classList.remove('good', 'mid', 'bad');
-      if (ms == null) {
+      if (res == null) {
         el.classList.add('bad');
-        el.textContent = '×';
-      } else {
-        el.classList.add(pingClass(ms));
-        el.textContent = ms + ' ms';
+        el.innerHTML = '<span class="ap-text">×</span>';
+        return;
       }
+      const disp = pingDisplay(res);
+      el.classList.add(disp.cls);
+      const jitter = (typeof res.jitter === 'number') ? ` · j ${Math.round(res.jitter)}` : '';
+      el.innerHTML =
+        `<span class="ap-text">${disp.txt}${jitter}</span>` +
+        `<span class="ap-bar"></span>`;
+    }
+
+    function updatePingThresholdsFromSettings(cfg) {
+      const ms = Number(cfg && cfg.ping_green_ms);
+      const jit = Number(cfg && cfg.ping_green_jitter_ms);
+      if (Number.isFinite(ms) && ms > 0) pingThresholds.greenMs = ms;
+      if (Number.isFinite(jit) && jit > 0) pingThresholds.greenJitterMs = jit;
     }
 
     function openSettings() {
@@ -2118,6 +2267,14 @@
       ping_url:                       [['setPingUrl', 'url']],
       ping_timeout:                   [['setPingTimeout', 'int']],
       ping_concurrency:               [['setPingConcurrency', 'int']],
+      ping_method:                    [['setPingMethod', 'value']],
+      ping_measure:                   [['setPingMeasure', 'value']],
+      ping_aggregate:                 [['setPingAggregate', 'value']],
+      ping_warmup:                    [['setPingWarmup', 'checked']],
+      ping_warmup_count:              [['setPingWarmupCount', 'int0']],
+      ping_samples:                   [['setPingSamples', 'int']],
+      ping_green_ms:                  [['setPingGreenMs', 'int']],
+      ping_green_jitter_ms:           [['setPingGreenJitter', 'int']],
       proxy_listen:                   [['setProxyListen', 'value']],
       proxy_auth_enabled:             [['setProxyAuth', 'checked']],
       proxy_username:                 [['setProxyUsername', 'value']],
@@ -2142,9 +2299,14 @@
             let value;
             if (kind === 'checked') value = el.checked;
             else if (kind === 'int') value = parseInt(el.value, 10);
+            else if (kind === 'int0') value = parseInt(el.value, 10);
             else value = el.value.trim();
 
             if (kind === 'int' && (!Number.isFinite(value) || value < 1)) {
+              el.focus();
+              return;
+            }
+            if (kind === 'int0' && (!Number.isFinite(value) || value < 0)) {
               el.focus();
               return;
             }
@@ -2156,6 +2318,10 @@
             sendSetting(key, value);
             if (key === 'proxy_listen' || key === 'proxy_auth_enabled') {
               updateProxyHint();
+            }
+            if (key.startsWith('ping_')) {
+              renderList();
+              updateActivePing();
             }
           });
         });
@@ -2280,6 +2446,15 @@
       applySettingValue('ping_url',                        cfg.ping_url || '');
       applySettingValue('ping_timeout',                    cfg.ping_timeout ?? 5);
       applySettingValue('ping_concurrency',                cfg.ping_concurrency ?? 8);
+      applySettingValue('ping_method',                     cfg.ping_method || 'http');
+      applySettingValue('ping_measure',                    cfg.ping_measure || 'response');
+      applySettingValue('ping_aggregate',                  cfg.ping_aggregate || 'median');
+      applySettingValue('ping_warmup',                     cfg.ping_warmup !== false);
+      applySettingValue('ping_warmup_count',               cfg.ping_warmup_count ?? 3);
+      applySettingValue('ping_samples',                    cfg.ping_samples ?? 5);
+      applySettingValue('ping_green_ms',                   cfg.ping_green_ms ?? 120);
+      applySettingValue('ping_green_jitter_ms',            cfg.ping_green_jitter_ms ?? 40);
+      updatePingThresholdsFromSettings(cfg);
       applySettingValue('proxy_listen',                    cfg.proxy_listen || '127.0.0.1');
       applySettingValue('proxy_auth_enabled',              cfg.proxy_auth_enabled !== false);
       applySettingValue('proxy_username',                  cfg.proxy_username || 'obxod');

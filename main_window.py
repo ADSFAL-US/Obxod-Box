@@ -247,6 +247,14 @@ class MainWindow:
             "ping_url": lambda v: isinstance(v, str) and v.lower().startswith(("http://", "https://")) and len(v) < 2048,
             "ping_timeout": lambda v: isinstance(v, int) and 1 <= v <= 30,
             "ping_concurrency": lambda v: isinstance(v, int) and 1 <= v <= 20,
+            "ping_method": lambda v: v in ("http", "tcp", "icmp"),
+            "ping_measure": lambda v: v in ("response", "handshake"),
+            "ping_aggregate": lambda v: v in ("median", "mean", "max"),
+            "ping_warmup": lambda v: isinstance(v, bool),
+            "ping_warmup_count": lambda v: isinstance(v, int) and 0 <= v <= 20,
+            "ping_samples": lambda v: isinstance(v, int) and 1 <= v <= 20,
+            "ping_green_ms": lambda v: isinstance(v, (int, float)) and 5 <= v <= 1000,
+            "ping_green_jitter_ms": lambda v: isinstance(v, (int, float)) and 5 <= v <= 1000,
             "proxy_auth_enabled": lambda v: isinstance(v, bool),
             "proxy_listen": lambda v: v in ("127.0.0.1", "0.0.0.0"),
             "proxy_username": lambda v: (
@@ -1795,6 +1803,14 @@ class MainWindow:
             "ping_url":                        self.config.get("ping_url", DEFAULT_PING_URL),
             "ping_timeout":                    self.config.get("ping_timeout", 5),
             "ping_concurrency":                self.config.get("ping_concurrency", 8),
+            "ping_method":                     self.config.get("ping_method", "http"),
+            "ping_measure":                    self.config.get("ping_measure", "response"),
+            "ping_aggregate":                  self.config.get("ping_aggregate", "median"),
+            "ping_warmup":                     bool(self.config.get("ping_warmup", True)),
+            "ping_warmup_count":               self.config.get("ping_warmup_count", 3),
+            "ping_samples":                    self.config.get("ping_samples", 5),
+            "ping_green_ms":                   self.config.get("ping_green_ms", 50),
+            "ping_green_jitter_ms":            self.config.get("ping_green_jitter_ms", 20),
             "proxy_auth_enabled":              bool(self.config.get("proxy_auth_enabled", True)),
             "proxy_listen":                    self.config.get("proxy_listen", "127.0.0.1"),
             "proxy_username":                  self.config.get("proxy_username", "obxod"),
@@ -1861,10 +1877,18 @@ class MainWindow:
         timeout = float(self.config.get("ping_timeout", 5))
         concurrency = int(self.config.get("ping_concurrency", 8))
         concurrency = max(1, min(20, concurrency))
+        ping_options = {
+            "method": self.config.get("ping_method", "http"),
+            "measure": self.config.get("ping_measure", "response"),
+            "aggregate": self.config.get("ping_aggregate", "median"),
+            "warmup": bool(self.config.get("ping_warmup", True)),
+            "warmup_count": int(self.config.get("ping_warmup_count", 3)),
+            "samples": int(self.config.get("ping_samples", 5)),
+        }
 
         logger.info(
-            "Ping: %d конфигов, url=%s, timeout=%.1fs, concurrency=%d",
-            len(records), url, timeout, concurrency,
+            "Ping: %d конфигов, url=%s, timeout=%.1fs, concurrency=%d, opts=%s",
+            len(records), url, timeout, concurrency, ping_options,
         )
 
         await self._push_js_safe("window.setPingBusy(true); window.setPingReset();")
@@ -1875,24 +1899,24 @@ class MainWindow:
             async with sem:
                 if gen != self._ping_generation:
                     return
-                ms: int | None
+                result: dict | None
                 if record.get("kind") != "xray" or not isinstance(record.get("raw"), dict):
-                    ms = None
+                    result = None
                 else:
                     try:
-                        ms = await asyncio.to_thread(
+                        result = await asyncio.to_thread(
                             self.xray_manager.ping_config_sync,
-                            record["raw"], url, timeout,
+                            record["raw"], url, timeout, ping_options,
                         )
                     except Exception as e:
                         logger.info("Ping [%d] '%s' failed: %s",
                                     index, record["meta"].get("name"), e)
-                        ms = None
+                        result = None
 
                 if gen != self._ping_generation:
                     return
                 await self._push_js_safe(
-                    f"window.setPingResult({index}, {json.dumps(ms)});"
+                    f"window.setPingResult({index}, {json.dumps(result)});"
                 )
 
         try:

@@ -34,6 +34,19 @@ DEFAULTS: dict[str, Any] = {
     "ping_url": "https://www.gstatic.com/generate_204",
     "ping_timeout": 5,
     "ping_concurrency": 8,
+    # Метод: http (GET через туннель), tcp (TCP через туннель), icmp (до сервера).
+    "ping_method": "http",
+    # Что учитывать в замере: response (только обмен по прогретому пути)
+    # или handshake (установка соединения + запрос).
+    "ping_measure": "response",
+    # Что отдавать как итог: median / mean / max.
+    "ping_aggregate": "median",
+    "ping_warmup": True,
+    "ping_warmup_count": 3,
+    "ping_samples": 5,
+    # Порог зелёного для оценки сервера (score в UI).
+    "ping_green_ms": 120,
+    "ping_green_jitter_ms": 40,
     # ── роутинг ──
     "routing_set": "RU-auto-routing",
     # ── автообновления ──

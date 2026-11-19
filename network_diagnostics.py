@@ -18,6 +18,7 @@ import socket
 import subprocess
 import sys
 import time
+import urllib.parse
 import urllib.request
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -36,13 +37,103 @@ ISSUES_URL = "https://github.com/ADSFAL-US/Obxod-Box/issues/new"
 DEFAULT_PROBE_URL = "https://www.gstatic.com/generate_204"
 TUN_INTERFACE_NAME = "obxod-tun"
 TUN_NAME_HINTS = ("obxod-tun", "wintun", "tun", "tap", "wireguard", "wg")
-VIRTUAL_IFACE_HINTS = (
-    "tun", "tap", "wintun", "wireguard", "tailscale", "zerotier", "openvpn",
-    "nordlynx", "proton", "hamachi", "radmin", "warp", "vpn",
+SKIP_IFACE_PREFIXES = ("loopback", "docker", "br-", "veth", "virbr", "vmnet")
+
+# Тип туннеля определяем по драйверу адаптера (Win32_NetworkAdapter.ServiceName),
+# а не по отображаемому имени: в Windows оно локализовано и одинаково у всех
+# Wintun-адаптеров («Подключение по локальной сети»).
+VPN_DRIVER_SERVICES: dict[str, str] = {
+    "rvnetmp60": "Radmin VPN",
+    "rvnetmp": "Radmin VPN",
+    "hamachi": "Hamachi",
+    "zerotierone": "ZeroTier",
+    "tailscale": "Tailscale",
+    "wireguard": "WireGuard",
+    "nordlynx": "NordVPN",
+    "protonvpn": "ProtonVPN",
+    "tap0901": "OpenVPN (TAP)",
+    "tap-windows6": "OpenVPN (TAP)",
+    "ovpn-dco": "OpenVPN",
+    "openvpn": "OpenVPN",
+    "softether": "SoftEther",
+    "neorouter": "NeoRouter",
+    "cloudflarewarp": "Cloudflare WARP",
+    "warp-svc": "Cloudflare WARP",
+}
+
+# Описание драйвера (INF, обычно английское) — резервный признак для
+# адаптеров, которых нет в таблице выше.
+VPN_DESC_HINTS = (
+    "vpn", "wireguard", "zerotier", "hamachi", "radmin", "tailscale",
+    "openvpn", "tap-windows", "tap0901", "softether", "neorouter",
+    "cloudflare warp",
 )
-SKIP_IFACE_PREFIXES = ("lo", "loopback", "docker", "br-", "veth", "virbr", "vmnet")
+
+# Процессы-демоны VPN/прокси. Сравниваем ТОЛЬКО basename исполняемого файла:
+# подстрочный поиск по командной строке давал ложные срабатывания
+# (Code.exe с флагом --use-angle=d3d11-warp-webgl, git.exe с путём к xray).
+VPN_PROCESS_NAMES: dict[str, str] = {
+    "rvcontrolsvc.exe": "Radmin VPN",
+    "rvnetsvc.exe": "Radmin VPN",
+    "hamachi-2.exe": "Hamachi",
+    "hamachi-2-ui.exe": "Hamachi",
+    "zerotier_one.exe": "ZeroTier",
+    "zerotieroneservice.exe": "ZeroTier",
+    "tailscaled.exe": "Tailscale",
+    "tailscale-ipn.exe": "Tailscale",
+    "wireguard.exe": "WireGuard",
+    "openvpn.exe": "OpenVPN",
+    "warp-svc.exe": "Cloudflare WARP",
+    "clash.exe": "Clash",
+    "clash-verge.exe": "Clash Verge",
+    "mihomo.exe": "Mihomo",
+    "v2ray.exe": "v2ray",
+    "v2rayn.exe": "v2rayN",
+    "sing-box.exe": "sing-box",
+    "nekoray.exe": "NekoRay",
+    "shadowsocks.exe": "Shadowsocks",
+    "trojan.exe": "Trojan",
+    "hysteria.exe": "Hysteria",
+    "tun2socks.exe": "tun2socks",
+    "netch.exe": "Netch",
+    "proxifier.exe": "Proxifier",
+    "psiphon.exe": "Psiphon",
+    "nordvpn-service.exe": "NordVPN",
+    "protonvpn-service.exe": "ProtonVPN",
+    "expressvpn.exe": "ExpressVPN",
+    "surfshark-service.exe": "Surfshark",
+}
+
+# Клиентские процессы по названию VPN-адаптера. Нужны, когда у драйвера
+# (miniport) нет PID: Radmin/Hamachi держат адаптер через службу-драйвер,
+# а пользовательский процесс называется иначе (RvControlSvc.exe и т.п.).
+VPN_CLIENT_PROCESSES: dict[str, tuple[str, ...]] = {
+    "Radmin VPN": ("rvcontrolsvc.exe", "rvnetsvc.exe", "radmin.exe"),
+    "Hamachi": ("hamachi-2.exe", "hamachi-2-ui.exe"),
+    "ZeroTier": ("zerotier_one.exe", "zerotieroneservice.exe"),
+    "Tailscale": ("tailscaled.exe", "tailscale-ipn.exe"),
+    "WireGuard": ("wireguard.exe",),
+    "OpenVPN": ("openvpn.exe", "openvpn-gui.exe"),
+    "OpenVPN (TAP)": ("openvpn.exe", "openvpn-gui.exe"),
+    "NordVPN": ("nordvpn-service.exe",),
+    "ProtonVPN": ("protonvpn-service.exe",),
+    "SoftEther": ("vpnclient.exe", "vpncmgr.exe"),
+    "NeoRouter": ("nrservice.exe", "nrclient.exe"),
+}
+
+# Псевдо-интерфейсы Windows/системы: Teredo, ISATAP, 6to4, Hyper-V и т.п.
+# Они не являются ни TUN-туннелем, ни конкурирующим VPN — их нельзя
+# показывать в диагностике как проблему.
+PSEUDO_IFACE_HINTS = (
+    "teredo", "isatap", "pseudo", "псевдо", "6to4", "loopback", "bluetooth",
+    "wi-fi direct", "wan miniport", "npcap", "hyper-v", "vethernet",
+    "vmware", "virtualbox", "vbox", "docker", "cni", "flannel",
+    "kube", "calico",
+)
 
 # Клиенты, которые любят держать TUN/WFP/системный прокси и мешать Xray.
+# Используется только для проверки «можно ли завершить процесс» (kill_process),
+# в отчёт диагностики процесс попадает лишь при доказанном конфликте.
 INTERFERING_PROCESS_HINTS = (
     "clash", "mihomo", "clash-verge", "v2ray", "v2rayn", "xray",
     "sing-box", "singbox", "nekoray", "nekobox", "shadowsocks", "ss-local",
@@ -92,6 +183,7 @@ class DiagnosticIssue:
     suggestion: str = ""
     known: bool = True
     processes: list[dict[str, Any]] = field(default_factory=list)
+    actions: list[dict[str, Any]] = field(default_factory=list)
     issue_url: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -104,6 +196,7 @@ class DiagnosticReport:
     mode: str
     summary: str
     issues: list[DiagnosticIssue] = field(default_factory=list)
+    traffic_ok: bool | None = None
     checked_at: float = field(default_factory=time.time)
 
     def to_dict(self) -> dict[str, Any]:
@@ -112,6 +205,7 @@ class DiagnosticReport:
             "mode": self.mode,
             "summary": self.summary,
             "issues": [i.to_dict() for i in self.issues],
+            "traffic_ok": self.traffic_ok,
             "checked_at": self.checked_at,
         }
 
@@ -179,53 +273,24 @@ def _process_tree_pids(root_pid: int | None = None) -> set[int]:
     return result
 
 
-def _hint_matches(name: str, cmdline: str, hint: str) -> bool:
-    blob = f"{name} {cmdline}".lower()
-    if hint in _SHORT_HINTS:
-        return re.search(r"(^|[^a-z0-9])" + re.escape(hint) + r"([^a-z0-9]|$)", blob) is not None
-    return hint in blob
+def _exe_basename(name: str, exe: str) -> str:
+    base = Path(exe).name if exe else ""
+    return (base or name or "").strip().lower()
 
 
-def _known_process_reason(name: str, cmdline: str) -> str | None:
+def _known_process_reason(name: str, exe: str = "") -> str | None:
+    """Признак «это VPN/прокси-клиент» — только по basename исполняемого файла."""
+    base = _exe_basename(name, exe)
+    label = VPN_PROCESS_NAMES.get(base)
+    if label:
+        return label
     for hint in INTERFERING_PROCESS_HINTS:
-        if _hint_matches(name, cmdline, hint):
+        if hint in _SHORT_HINTS:
+            if re.search(r"(^|[^a-z0-9])" + re.escape(hint) + r"([^a-z0-9]|$)", base):
+                return hint
+        elif hint in base:
             return hint
     return None
-
-
-def _collect_interfering_processes(own_pids: set[int]) -> list[dict[str, Any]]:
-    if psutil is None:
-        return []
-    found: list[dict[str, Any]] = []
-    seen: set[int] = set()
-    try:
-        iterator = psutil.process_iter(["pid", "name", "exe", "cmdline"])
-    except Exception as exc:
-        logger.debug("process_iter: %s", exc)
-        return []
-
-    for proc in iterator:
-        try:
-            pid = int(proc.info.get("pid") or 0)
-            if not pid or pid in own_pids or pid in seen:
-                continue
-            name = str(proc.info.get("name") or "")
-            exe = str(proc.info.get("exe") or "")
-            cmdline = " ".join(proc.info.get("cmdline") or [])
-            reason = _known_process_reason(f"{name} {exe}", cmdline)
-            if reason is None:
-                continue
-            seen.add(pid)
-            found.append({
-                "pid": pid,
-                "name": name or Path(exe).name or f"pid {pid}",
-                "reason": reason,
-            })
-            if len(found) >= 12:
-                break
-        except (psutil.Error, OSError, ValueError):
-            continue
-    return found
 
 
 def _killable_owner(owner: dict[str, Any] | None) -> list[dict[str, Any]]:
@@ -233,9 +298,80 @@ def _killable_owner(owner: dict[str, Any] | None) -> list[dict[str, Any]]:
     if not owner:
         return []
     name = str(owner.get("name") or "")
-    if _known_process_reason(name, "") is None:
+    if _known_process_reason(name) is None:
         return []
     return [owner]
+
+
+def _service_pid(service: str) -> int | None:
+    """PID процесса, обслуживающего драйвер/службу адаптера (только Windows)."""
+    if psutil is None or not service or sys.platform != "win32":
+        return None
+    getter = getattr(psutil, "win_service_get", None)
+    if getter is None:
+        return None
+    try:
+        info = getter(service).as_dict()
+    except Exception as exc:
+        logger.debug("win_service_get(%s): %s", service, exc)
+        return None
+    pid = info.get("pid")
+    return int(pid) if pid else None
+
+
+def _processes_for_adapters(
+    adapters: list[dict[str, Any]], own_pids: set[int]
+) -> list[dict[str, Any]]:
+    """Процессы, которые реально владеют конфликтующими адаптерами.
+
+    Сначала пробуем PID службы драйвера (Win32_NetworkAdapter.ServiceName).
+    У miniport-драйверов (Radmin, Hamachi) PID нет — тогда ищем процесс
+    клиента по basename, сопоставляя его с названием адаптера.
+    """
+    found: list[dict[str, Any]] = []
+    seen: set[int] = set()
+
+    def add(pid: int, name: str, reason: str) -> None:
+        if not pid or pid in own_pids or pid in seen:
+            return
+        seen.add(pid)
+        found.append({"pid": pid, "name": name or f"pid {pid}", "reason": reason})
+
+    for adapter in adapters:
+        label = str(adapter.get("label") or "vpn")
+        pid = _service_pid(str(adapter.get("service") or ""))
+        if pid:
+            try:
+                add(pid, psutil.Process(pid).name(), label)
+                continue
+            except Exception as exc:
+                logger.debug("adapter owner %s: %s", pid, exc)
+
+        keyword = label.split()[0].lower()
+        if len(keyword) < 4 or psutil is None:
+            continue
+        candidates = VPN_CLIENT_PROCESSES.get(label, ())
+        try:
+            iterator = psutil.process_iter(["pid", "name", "exe"])
+        except Exception as exc:
+            logger.debug("process_iter: %s", exc)
+            continue
+        for proc in iterator:
+            try:
+                name = str(proc.info.get("name") or "")
+                exe = str(proc.info.get("exe") or "")
+                base = _exe_basename(name, exe)
+                if candidates:
+                    if base not in candidates:
+                        continue
+                elif keyword not in base:
+                    continue
+                if _known_process_reason(name, exe) is None:
+                    continue
+                add(int(proc.info.get("pid") or 0), name, label)
+            except (psutil.Error, OSError, ValueError):
+                continue
+    return found
 
 
 def _port_owner(port: int) -> dict[str, Any] | None:
@@ -267,45 +403,273 @@ def _port_owner(port: int) -> dict[str, Any] | None:
     return None
 
 
-def _interface_names() -> dict[str, bool]:
-    """Имя интерфейса -> поднят ли он."""
-    if psutil is None:
-        return {}
+def _run_powershell_json(script: str, timeout: float = 10.0) -> dict[str, Any] | None:
     try:
-        stats = psutil.net_if_stats()
-        return {name: bool(st.isup) for name, st in stats.items()}
+        r = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+            capture_output=True, timeout=timeout, check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
     except Exception as exc:
-        logger.debug("net_if_stats: %s", exc)
-        return {}
+        logger.debug("powershell snapshot: %s", exc)
+        return None
+    raw = (r.stdout or b"").decode("utf-8", errors="replace").strip()
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except ValueError as exc:
+        logger.debug("powershell snapshot json: %s (%s)", exc, raw[:200])
+        return None
+    return data if isinstance(data, dict) else None
 
 
-def _default_route_devices() -> list[str]:
+def _resolve_probe_ip(url: str) -> str | None:
+    try:
+        host = urllib.parse.urlsplit(url).hostname
+    except ValueError:
+        return None
+    if not host:
+        return None
+    try:
+        infos = socket.getaddrinfo(host, None, socket.AF_INET, socket.SOCK_STREAM)
+    except OSError as exc:
+        logger.debug("resolve %s: %s", host, exc)
+        return None
+    for info in infos:
+        addr = info[4][0]
+        if addr:
+            return str(addr)
+    return None
+
+
+def _adapter_label(adapter: dict[str, Any]) -> str | None:
+    """Тип VPN-адаптера по драйверу (ServiceName), затем по описанию."""
+    service = str(adapter.get("service") or "").strip().lower()
+    if service in VPN_DRIVER_SERVICES:
+        return VPN_DRIVER_SERVICES[service]
+    desc = str(adapter.get("desc") or "").lower()
+    if any(hint in desc for hint in VPN_DESC_HINTS):
+        return str(adapter.get("desc") or "VPN")
+    return None
+
+
+def _is_pseudo_iface(name: str) -> bool:
+    low = (name or "").lower()
+    # "lo" — точное имя loopback в Linux; как префикс оно ошибочно отсекало
+    # английские «Local Area Connection».
+    if low in ("lo", "loopback"):
+        return True
+    if low.startswith(SKIP_IFACE_PREFIXES):
+        return True
+    return any(hint in low for hint in PSEUDO_IFACE_HINTS)
+
+
+def _is_own_tun(name: str) -> bool:
+    low = (name or "").lower()
+    return "obxod" in low or TUN_INTERFACE_NAME.lower() == low
+
+
+# Radmin VPN: miniport RvNetMP60 после обновления умеет «залипать» в состоянии
+# ошибки драйвера. Адаптер при этом не поднимается и маршрутов не держит, но
+# NDIS-фильтр продолжает резать трафик — отключение адаптера не помогает,
+# лечится только удалением устройства (pnputil /remove-device).
+RADMIN_SERVICES = frozenset({"rvnetmp60", "rvnetmp"})
+RADMIN_PROCESS_NAMES = frozenset({"rvcontrolsvc.exe", "rvnetsvc.exe", "radmin.exe"})
+
+# ConfigManagerErrorCode, означающие сбой драйвера, а не штатное отключение.
+# 22 (CM_PROB_DISABLED) сюда НЕ входит: это нормально выключенный адаптер.
+BROKEN_DEVICE_ERROR_CODES = frozenset({
+    10,  # CM_PROB_FAILED_START
+    24,  # CM_PROB_DEVICE_NOT_THERE
+    28,  # CM_PROB_FAILED_INSTALL
+    31,  # CM_PROB_FAILED_ADD
+    39,  # CM_PROB_FAILED_LOAD
+    43,  # CM_PROB_FAILED_POST_START
+    52,  # CM_PROB_UNSIGNED_DRIVER
+})
+
+
+def _is_radmin_adapter(adapter: dict[str, Any]) -> bool:
+    service = str(adapter.get("service") or "").strip().lower()
+    if service in RADMIN_SERVICES:
+        return True
+    desc = str(adapter.get("desc") or "").lower()
+    return "radmin" in desc
+
+
+def _broken_radmin_adapters(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
+    """Radmin-адаптеры со сбоем драйвера (не просто выключенные)."""
+    result: list[dict[str, Any]] = []
+    for adapter in snapshot.get("adapters") or []:
+        if not _is_radmin_adapter(adapter):
+            continue
+        try:
+            error = int(adapter.get("error") or 0)
+        except (TypeError, ValueError):
+            error = 0
+        if error not in BROKEN_DEVICE_ERROR_CODES:
+            continue
+        result.append({
+            "name": str(adapter.get("name") or "Radmin VPN"),
+            "label": "Radmin VPN",
+            "service": str(adapter.get("service") or ""),
+            "desc": str(adapter.get("desc") or ""),
+            "device": str(adapter.get("pnp") or ""),
+            "error": error,
+        })
+    return result
+
+
+def _radmin_adapters(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
+    """Все Radmin-адаптеры (включая выключенные) — для «залипшего» случая."""
+    result: list[dict[str, Any]] = []
+    for adapter in snapshot.get("adapters") or []:
+        if not _is_radmin_adapter(adapter):
+            continue
+        try:
+            error = int(adapter.get("error") or 0)
+        except (TypeError, ValueError):
+            error = 0
+        result.append({
+            "name": str(adapter.get("name") or "Radmin VPN"),
+            "label": "Radmin VPN",
+            "service": str(adapter.get("service") or ""),
+            "desc": str(adapter.get("desc") or ""),
+            "device": str(adapter.get("pnp") or ""),
+            "error": error,
+            "up": int(adapter.get("status") or 0) == 2,
+        })
+    return result
+
+
+def _radmin_started_before_us() -> bool:
+    """Radmin-служба запущена раньше нашего процесса.
+
+    Известный сценарий: Radmin, поднятый до Obxod-BOX, забирает сеть и
+    блокирует соединение даже после отключения адаптера.
+    """
+    if psutil is None or sys.platform != "win32":
+        return False
+    try:
+        own_start = psutil.Process(os.getpid()).create_time()
+    except Exception as exc:
+        logger.debug("own create_time: %s", exc)
+        return False
+    try:
+        for proc in psutil.process_iter(["name", "create_time"]):
+            name = str(proc.info.get("name") or "").lower()
+            if name not in RADMIN_PROCESS_NAMES:
+                continue
+            started = proc.info.get("create_time")
+            if started and started < own_start:
+                return True
+    except Exception as exc:
+        logger.debug("radmin start time: %s", exc)
+    return False
+
+
+def _radmin_actions(adapters: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    actions: list[dict[str, Any]] = []
+    for adapter in adapters:
+        device = str(adapter.get("device") or "")
+        if not device:
+            continue
+        actions.append({
+            "action": "remove_interface",
+            "label": "Удалить интерфейс Radmin VPN",
+            "device": device,
+            "name": str(adapter.get("name") or "Radmin VPN"),
+        })
+    return actions
+
+
+def _network_snapshot(probe_ip: str | None) -> dict[str, Any]:
+    """Адаптеры + маршруты + фактический интерфейс до probe_ip.
+
+    Возвращает {"adapters": [...], "routes": [...], "probe_iface": str|None}.
+    """
+    if sys.platform == "win32":
+        probe_line = ""
+        if probe_ip:
+            probe_line = (
+                f"$r = Find-NetRoute -RemoteIPAddress '{probe_ip}' "
+                "| Where-Object { $_.DestinationPrefix } | Select-Object -First 1; "
+                "if ($r) { $probe = [pscustomobject]@{ iface = $r.InterfaceAlias; "
+                "next = $r.NextHop; dest = $r.DestinationPrefix } }"
+            )
+        script = (
+            "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; "
+            "$ErrorActionPreference = 'SilentlyContinue'; "
+            "$adapters = @(Get-CimInstance Win32_NetworkAdapter "
+            "| Where-Object { $_.NetConnectionID } | ForEach-Object { "
+            "[pscustomobject]@{ name = $_.NetConnectionID; desc = $_.Description; "
+            "service = $_.ServiceName; status = [int]$_.NetConnectionStatus; "
+            "error = [int]$_.ConfigManagerErrorCode; "
+            "enabled = [bool]$_.NetEnabled; pnp = $_.PNPDeviceID } }); "
+            "$routes = @(Get-NetRoute -AddressFamily IPv4 "
+            "| Where-Object { $_.DestinationPrefix -in @('0.0.0.0/0','0.0.0.0/1','128.0.0.0/1') } "
+            "| ForEach-Object { [pscustomobject]@{ dest = $_.DestinationPrefix; "
+            "iface = $_.InterfaceAlias; metric = [int]$_.RouteMetric; "
+            "ifmetric = [int]$_.InterfaceMetric } }); "
+            "$probe = $null; " + probe_line + " "
+            "[pscustomobject]@{ adapters = $adapters; routes = $routes; probe = $probe } "
+            "| ConvertTo-Json -Depth 4 -Compress"
+        )
+        data = _run_powershell_json(script)
+        if data is None:
+            return {"adapters": [], "routes": [], "probe_iface": None}
+        probe = data.get("probe") or {}
+        return {
+            "adapters": [a for a in (data.get("adapters") or []) if isinstance(a, dict)],
+            "routes": [r for r in (data.get("routes") or []) if isinstance(r, dict)],
+            "probe_iface": (probe.get("iface") or None) if isinstance(probe, dict) else None,
+        }
+
     if sys.platform.startswith("linux"):
+        adapters: list[dict[str, Any]] = []
+        try:
+            stats = psutil.net_if_stats() if psutil else {}
+            for name, st in stats.items():
+                adapters.append({
+                    "name": name, "desc": name, "service": "",
+                    "status": 2 if st.isup else 7,
+                })
+        except Exception as exc:
+            logger.debug("net_if_stats: %s", exc)
+        routes: list[dict[str, Any]] = []
+        probe_iface = None
         try:
             r = subprocess.run(
                 ["ip", "-4", "route", "show", "default"],
                 capture_output=True, text=True, timeout=3, check=False,
             )
-            devices = re.findall(r"\bdev\s+(\S+)", r.stdout or "")
-            return list(dict.fromkeys(devices))
+            for dev in re.findall(r"\bdev\s+(\S+)", r.stdout or ""):
+                routes.append({"dest": "0.0.0.0/0", "iface": dev})
+            if probe_ip:
+                r = subprocess.run(
+                    ["ip", "-4", "route", "get", probe_ip],
+                    capture_output=True, text=True, timeout=3, check=False,
+                )
+                m = re.search(r"\bdev\s+(\S+)", r.stdout or "")
+                probe_iface = m.group(1) if m else None
         except Exception as exc:
-            logger.debug("ip route default: %s", exc)
-    elif sys.platform == "win32":
-        command = (
-            "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; "
-            "Get-NetRoute -DestinationPrefix '0.0.0.0/0' "
-            "| Select-Object -ExpandProperty InterfaceAlias"
-        )
+            logger.debug("ip route: %s", exc)
+        return {"adapters": adapters, "routes": routes, "probe_iface": probe_iface}
+
+    if sys.platform == "darwin":
+        adapters = []
         try:
-            r = subprocess.run(
-                ["powershell", "-NoProfile", "-Command", command],
-                capture_output=True, text=True, timeout=5, check=False,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-            )
-            return [line.strip() for line in (r.stdout or "").splitlines() if line.strip()]
+            stats = psutil.net_if_stats() if psutil else {}
+            for name, st in stats.items():
+                adapters.append({
+                    "name": name, "desc": name, "service": "",
+                    "status": 2 if st.isup else 7,
+                })
         except Exception as exc:
-            logger.debug("Get-NetRoute default: %s", exc)
-    elif sys.platform == "darwin":
+            logger.debug("net_if_stats: %s", exc)
+        routes = []
+        probe_iface = None
         try:
             r = subprocess.run(
                 ["route", "-n", "get", "default"],
@@ -313,22 +677,89 @@ def _default_route_devices() -> list[str]:
             )
             for line in (r.stdout or "").splitlines():
                 if line.strip().startswith("interface:"):
-                    return [line.split(":", 1)[1].strip()]
+                    routes.append({
+                        "dest": "0.0.0.0/0",
+                        "iface": line.split(":", 1)[1].strip(),
+                    })
+            if probe_ip:
+                r = subprocess.run(
+                    ["route", "-n", "get", probe_ip],
+                    capture_output=True, text=True, timeout=3, check=False,
+                )
+                for line in (r.stdout or "").splitlines():
+                    if line.strip().startswith("interface:"):
+                        probe_iface = line.split(":", 1)[1].strip()
+                        break
         except Exception as exc:
-            logger.debug("route get default: %s", exc)
-    return []
+            logger.debug("route get: %s", exc)
+        return {"adapters": adapters, "routes": routes, "probe_iface": probe_iface}
+
+    return {"adapters": [], "routes": [], "probe_iface": None}
 
 
-def _is_tun_name(name: str) -> bool:
-    low = name.lower()
-    return any(hint in low for hint in TUN_NAME_HINTS)
+def _winning_default_iface(snapshot: dict[str, Any]) -> str | None:
+    """Интерфейс, который реально выигрывает default route (metric+ifmetric)."""
+    best: tuple[int, str] | None = None
+    for route in snapshot.get("routes") or []:
+        if str(route.get("dest") or "") != "0.0.0.0/0":
+            continue
+        iface = str(route.get("iface") or "")
+        if not iface:
+            continue
+        try:
+            metric = int(route.get("metric") or 0) + int(route.get("ifmetric") or 0)
+        except (TypeError, ValueError):
+            metric = 0
+        if best is None or metric < best[0]:
+            best = (metric, iface)
+    return best[1] if best else None
 
 
-def _is_vpn_iface(name: str) -> bool:
-    low = name.lower()
-    if low.startswith(SKIP_IFACE_PREFIXES):
-        return False
-    return any(hint in low for hint in VIRTUAL_IFACE_HINTS)
+def _conflicting_adapters(
+    snapshot: dict[str, Any], own_tun_names: set[str], *, traffic_failed: bool = False
+) -> list[dict[str, Any]]:
+    """Поднятые VPN-адаптеры, которые действительно мешают нам.
+
+    Конфликт подтверждается фактами, а не именем процесса:
+      * трафик до probe-хоста реально уходит через чужой VPN-адаптер;
+      * чужой VPN-адаптер выигрывает default route (меньшая суммарная метрика);
+      * проба трафика провалилась, и чужой VPN-адаптер поднят — единственный
+        обоснованный подозреваемый.
+
+    Адаптер, который просто существует (выключен, без маршрутов, проигрывает
+    по метрике), конфликтом не считается — именно это давало ложные
+    предупреждения про Discord/WARP/VS Code/ZeroTier.
+    """
+    own_lower = {name.lower() for name in own_tun_names}
+    probe_iface = str(snapshot.get("probe_iface") or "").lower()
+    winning = (_winning_default_iface(snapshot) or "").lower()
+    result: list[dict[str, Any]] = []
+    for adapter in snapshot.get("adapters") or []:
+        name = str(adapter.get("name") or "")
+        low = name.lower()
+        if not name or low in own_lower or _is_own_tun(name):
+            continue
+        if int(adapter.get("status") or 0) != 2:
+            continue
+        if _is_pseudo_iface(name):
+            continue
+        label = _adapter_label(adapter)
+        if not label:
+            continue
+        captures_probe = bool(probe_iface) and low == probe_iface
+        wins_default = bool(winning) and low == winning
+        if not (captures_probe or wins_default or traffic_failed):
+            continue
+        result.append({
+            "name": name,
+            "label": label,
+            "service": str(adapter.get("service") or ""),
+            "desc": str(adapter.get("desc") or ""),
+            "device": str(adapter.get("pnp") or ""),
+            "captures_probe": captures_probe,
+            "wins_default": wins_default,
+        })
+    return result
 
 
 def _build_proxy_opener(port: int) -> urllib.request.OpenerDirector:
@@ -360,6 +791,34 @@ def _probe_via_proxy(port: int, url: str, timeout: float) -> None:
 def _probe_direct(url: str, timeout: float) -> None:
     # Пустой ProxyHandler отключает переменные окружения http_proxy/https_proxy.
     _probe_http(urllib.request.build_opener(urllib.request.ProxyHandler({})), url, timeout)
+
+
+def _probe_with_retries(
+    probe, url: str, timeout: float, attempts: int = 3, delay: float = 0.5
+) -> tuple[bool, Exception | None]:
+    """Повторяет пробу, чтобы одиночный таймаут не считался блокировкой.
+
+    ZeroTier/Radmin блокируют соединение нестабильно: первая попытка может
+    упасть, а следующая пройти. Ошибкой считаем только полный провал всех
+    попыток. Общее время ограничено двумя таймаутами, чтобы диагностика
+    не висела.
+    """
+    last: Exception | None = None
+    deadline = time.monotonic() + max(timeout * 2.0, 4.0)
+    for attempt in range(max(1, attempts)):
+        try:
+            probe(url, timeout)
+            return True, None
+        except Exception as exc:
+            last = exc
+            logger.info(
+                "diagnostics: probe attempt %d/%d failed: %s",
+                attempt + 1, attempts, exc,
+            )
+            if attempt + 1 >= attempts or time.monotonic() >= deadline:
+                break
+            time.sleep(delay)
+    return False, last
 
 
 # ----------------------------------------------------------------------
@@ -479,11 +938,17 @@ def run_diagnostics(
                         ))
 
     # 3. TUN-интерфейс и маршруты.
-    ifaces = _interface_names()
-    tun_ifaces = [name for name in ifaces if _is_tun_name(name)]
+    # Снимок сети берём один раз: адаптеры (с драйвером), маршруты и
+    # фактический интерфейс, через который уходит трафик до probe-хоста.
+    probe_ip = _resolve_probe_ip(url)
+    snapshot = _network_snapshot(probe_ip)
+    adapters = snapshot.get("adapters") or []
+    adapter_status = {
+        str(a.get("name") or ""): int(a.get("status") or 0) for a in adapters
+    }
     own_tun_ifaces = [
-        name for name in tun_ifaces
-        if "obxod" in name.lower() or TUN_INTERFACE_NAME.lower() in name.lower()
+        str(a.get("name") or "") for a in adapters
+        if _is_own_tun(str(a.get("name") or ""))
     ]
     expected_tun = mode in ("tun", "both")
     if expected_tun and running:
@@ -501,7 +966,7 @@ def run_diagnostics(
                     "Если уже есть другой VPN/TUN — завершите его."
                 ),
             ))
-        elif not any(ifaces.get(name) for name in own_tun_ifaces):
+        elif not any(adapter_status.get(name) == 2 for name in own_tun_ifaces):
             issues.append(DiagnosticIssue(
                 code="tun_down",
                 severity="error",
@@ -510,31 +975,20 @@ def run_diagnostics(
                 suggestion="Переподключитесь. Если не помогает — проверьте права и лог Xray.",
             ))
 
-    other_vpn_ifaces = [
-        name for name, up in ifaces.items()
-        if up and _is_vpn_iface(name)
-        and name not in own_tun_ifaces
+    default_devices = [
+        str(r.get("iface") or "") for r in (snapshot.get("routes") or [])
+        if str(r.get("dest") or "") == "0.0.0.0/0" and r.get("iface")
     ]
-    if other_vpn_ifaces:
-        issues.append(DiagnosticIssue(
-            code="other_vpn_iface",
-            severity="warning",
-            title="Активен другой VPN-интерфейс",
-            detail="Найдены интерфейсы: " + ", ".join(sorted(other_vpn_ifaces)),
-            suggestion=(
-                "Два VPN-клиента могут бороться за маршруты. "
-                "Завершите лишний клиент и переподключитесь."
-            ),
-        ))
-
-    default_devices = _default_route_devices()
+    default_devices = list(dict.fromkeys(default_devices))
+    probe_iface = str(snapshot.get("probe_iface") or "")
     if expected_tun and running and default_devices:
         tun_lower = {name.lower() for name in own_tun_ifaces}
-        tun_default = [
-            dev for dev in default_devices
-            if dev.lower() in tun_lower
-            or (not own_tun_ifaces and _is_tun_name(dev))
-        ]
+        # Фактический маршрут до probe-хоста важнее списка default-маршрутов:
+        # при split-route (0.0.0.0/1 + 128.0.0.0/1) записи 0.0.0.0/0 может
+        # не быть вовсе, хотя трафик идёт через наш TUN.
+        tun_default = [dev for dev in default_devices if dev.lower() in tun_lower]
+        if probe_iface and probe_iface.lower() in tun_lower:
+            tun_default = tun_default or [probe_iface]
         if not tun_default:
             issues.append(DiagnosticIssue(
                 code="tun_route_missing",
@@ -546,22 +1000,11 @@ def run_diagnostics(
                     "администратора/root и закройте другие VPN-клиенты."
                 ),
             ))
-        other_defaults = [
-            dev for dev in default_devices
-            if dev not in tun_default and _is_vpn_iface(dev)
-        ]
-        if other_defaults:
-            issues.append(DiagnosticIssue(
-                code="vpn_default_route",
-                severity="warning",
-                title="Другой VPN держит default route",
-                detail="Default route указывает на: " + ", ".join(other_defaults),
-                suggestion="Завершите другой VPN-клиент, чтобы Xray смог перехватить трафик.",
-            ))
 
     # 4. Реальная проверка прохождения трафика.
     # urllib умеет только HTTP-прокси, поэтому SOCKS-only inbound проверяем
     # лишь на открытый порт (выше), без ложного «трафик не проходит».
+    traffic_ok: bool | None = None
     proxy_probe_ports = _inbound_ports(runtime, {"http", "mixed"})
     if running and mode in ("proxy", "both") and proxy_probe_ports:
         failed: list[int] = []
@@ -569,21 +1012,24 @@ def run_diagnostics(
         for port in proxy_probe_ports:
             if not _port_open(port):
                 continue
-            try:
-                _probe_via_proxy(port, url, timeout)
+            ok, _ = _probe_with_retries(
+                lambda u, t, p=port: _probe_via_proxy(p, u, t), url, timeout
+            )
+            if ok:
                 probe_ok = True
                 break
-            except Exception as exc:
-                logger.info("diagnostics: proxy port %s probe failed: %s", port, exc)
-                failed.append(port)
-        if not probe_ok and failed:
+            failed.append(port)
+        if probe_ok:
+            traffic_ok = True
+        elif failed:
+            traffic_ok = False
             issues.append(DiagnosticIssue(
                 code="proxy_probe_failed",
                 severity="error",
                 title="Трафик через прокси не проходит",
                 detail=(
                     "Не удалось выполнить запрос через локальный прокси-порт "
-                    f"{failed[0]}."
+                    f"{failed[0]} (3 попытки)."
                 ),
                 suggestion=(
                     "Проверьте конфиг сервера и интернет. Если ошибка повторяется "
@@ -592,15 +1038,14 @@ def run_diagnostics(
             ))
 
     if running and mode in ("tun", "both"):
-        try:
-            _probe_direct(url, timeout)
-        except Exception as exc:
-            logger.info("diagnostics: tun probe failed: %s", exc)
+        ok, exc = _probe_with_retries(_probe_direct, url, timeout)
+        traffic_ok = ok
+        if not ok:
             issues.append(DiagnosticIssue(
                 code="tun_probe_failed",
                 severity="error",
                 title="Трафик через TUN не проходит",
-                detail=f"Запрос напрямую не удался: {exc}",
+                detail=f"Запрос напрямую не удался (3 попытки): {exc}",
                 suggestion=(
                     "Проверьте, что TUN поднят и default route идёт через него. "
                     "Закройте другие VPN-клиенты. Если не помогает — приложите лог Xray."
@@ -643,30 +1088,125 @@ def run_diagnostics(
                     issue_url=ISSUES_URL,
                 ))
 
-    # 6. Другие VPN/прокси-клиенты.
-    processes = _collect_interfering_processes(own_pids)
-    if processes:
-        names = ", ".join(
-            f"{p['name']} (pid {p['pid']})" for p in processes[:6]
-        )
+    # 6. Другие VPN/прокси-клиенты — только при доказанном конфликте.
+    # Раньше здесь был поиск по подстроке в имени/командной строке, из-за чего
+    # в отчёт попадали Code.exe (флаг --use-angle=d3d11-warp-webgl), git.exe
+    # (путь к xray.exe) и любой выключенный VPN-адаптер. Теперь конфликт
+    # подтверждается фактами: адаптер поднят, его драйвер — VPN, и (если трафик
+    # проходит) через него реально уходит маршрут. Если трафик не проходит,
+    # поднятый VPN-адаптер — единственный обоснованный подозреваемый.
+    conflicting = _conflicting_adapters(
+        snapshot,
+        set(own_tun_ifaces),
+        traffic_failed=traffic_ok is False,
+    ) if expected_tun else []
+    if conflicting:
+        processes = _processes_for_adapters(conflicting, own_pids)
+        labels = ", ".join(f"{a['label']} ({a['name']})" for a in conflicting)
+        capturing = [a for a in conflicting if a["captures_probe"] or a["wins_default"]]
+        radmin_conflicts = [a for a in conflicting if _is_radmin_adapter(a)]
+        actions = _radmin_actions(radmin_conflicts) if radmin_conflicts else []
+        if traffic_ok is False and capturing:
+            severity = "error"
+            detail = (
+                f"Трафик не проходит, и через эти адаптеры уходит маршрут: {labels}."
+            )
+            suggestion = (
+                "Завершите указанный клиент и нажмите «Проверить снова». "
+                "Если процесса нет в списке — отключите адаптер вручную."
+            )
+        elif traffic_ok is False:
+            severity = "warning"
+            detail = (
+                f"Трафик не проходит. Подняты сторонние VPN-адаптеры: {labels}. "
+                "Они могут блокировать соединение на уровне фильтра."
+            )
+            suggestion = (
+                "Если переподключение не помогает — временно отключите этот клиент "
+                "и нажмите «Проверить снова»."
+            )
+        else:
+            severity = "warning"
+            detail = (
+                f"Трафик проходит, но маршрут делят адаптеры: {labels}. "
+                "Возможна утечка мимо туннеля."
+            )
+            suggestion = (
+                "Если соединение нестабильно — завершите лишний клиент. "
+                "Если всё работает, предупреждение можно игнорировать."
+            )
+        if radmin_conflicts:
+            suggestion = (
+                "Radmin VPN после обновления блокирует соединение намертво: "
+                "завершение процесса не помогает. Удалите его интерфейс — "
+                "Radmin пересоздаст его при следующем запуске."
+            )
         issues.append(DiagnosticIssue(
             code="interfering_process",
-            severity="warning",
-            title="Найдены другие VPN/прокси-клиенты",
-            detail=f"Они могут перехватывать трафик: {names}",
-            suggestion=(
-                "Завершите лишний клиент и нажмите «Проверить снова». "
-                "Обычно достаточно оставить только Obxod-BOX."
-            ),
+            severity=severity,
+            title="Другой VPN забирает трафик",
+            detail=detail,
+            suggestion=suggestion,
             processes=processes,
+            actions=actions,
+        ))
+
+    # 6b. Radmin VPN — персональная обработка.
+    # Два доказанных сценария:
+    #  1) miniport в состоянии сбоя драйвера: адаптер не поднимается, но его
+    #     NDIS-фильтр остаётся в стеке и режет трафик;
+    #  2) Radmin запущен раньше нас и «залип»: адаптер выключен, маршрутов нет,
+    #     но соединение блокируется, пока интерфейс не удалить.
+    # В обоих случаях помогает только удаление устройства — отключение
+    # адаптера не снимает блокировку.
+    radmin_all = _radmin_adapters(snapshot)
+    broken_radmin = _broken_radmin_adapters(snapshot)
+    if broken_radmin:
+        names = ", ".join(a["name"] for a in broken_radmin)
+        codes = ", ".join(str(a["error"]) for a in broken_radmin)
+        issues.append(DiagnosticIssue(
+            code="radmin_broken_interface",
+            severity="error" if traffic_ok is False else "warning",
+            title="Radmin VPN сломал сетевой интерфейс",
+            detail=(
+                f"Адаптер {names} в состоянии сбоя драйвера (код {codes}). "
+                "Он не поднят и не держит маршрут, но его фильтр остаётся в стеке "
+                "NDIS и блокирует соединение — отключение адаптера не помогает."
+            ),
+            suggestion=(
+                "Удалите интерфейс Radmin VPN и переподключитесь. "
+                "Radmin пересоздаст его при следующем запуске."
+            ),
+            actions=_radmin_actions(broken_radmin),
+        ))
+    elif (
+        traffic_ok is False
+        and radmin_all
+        and _radmin_started_before_us()
+    ):
+        issues.append(DiagnosticIssue(
+            code="radmin_stale_interface",
+            severity="error",
+            title="Radmin VPN блокирует соединение",
+            detail=(
+                "Radmin VPN был запущен раньше Obxod-BOX и держит сетевой фильтр. "
+                "Адаптер выключен и маршрутов не держит, но соединение блокируется — "
+                "отключение Radmin не помогает."
+            ),
+            suggestion=(
+                "Удалите интерфейс Radmin VPN и переподключитесь. "
+                "Radmin пересоздаст его при следующем запуске."
+            ),
+            actions=_radmin_actions(radmin_all),
         ))
 
     # 7. Неизвестная причина провала: если нет ни одного понятного
     #    конфликта/маршрутной проблемы, предлагаем отправить отчёт в Issues.
     known_cause_codes = {
-        "interfering_process", "other_vpn_iface", "vpn_default_route",
-        "tun_route_missing", "port_conflict", "proxy_port_closed",
-        "port_in_use", "permission_denied", "tun_create_failed",
+        "interfering_process", "tun_route_missing", "port_conflict",
+        "proxy_port_closed", "port_in_use", "permission_denied",
+        "tun_create_failed", "radmin_broken_interface",
+        "radmin_stale_interface",
     }
     if not any(i.code in known_cause_codes for i in issues):
         for issue in issues:
@@ -698,7 +1238,56 @@ def run_diagnostics(
         mode=mode,
         summary=summary,
         issues=issues,
+        traffic_ok=traffic_ok,
     )
+
+
+def remove_interface(device: str) -> tuple[bool, str]:
+    """Удаляет сломанный сетевой интерфейс (PnP-устройство).
+
+    Нужно для Radmin VPN: его miniport после обновления залипает в состоянии
+    ошибки и продолжает блокировать трафик, даже когда адаптер выключен.
+    Отключение адаптера не помогает — лечится только удалением устройства.
+    Radmin пересоздаст интерфейс при следующем запуске.
+
+    Устройство удаляется только если оно действительно VPN-адаптер: имя
+    устройства сверяется с таблицей драйверов, чтобы мост не превратился
+    в универсальный «удали любое устройство».
+    """
+    device = (device or "").strip()
+    if not device:
+        return False, "Не указан идентификатор устройства"
+    if sys.platform != "win32":
+        return False, "Удаление интерфейса поддерживается только в Windows"
+
+    snapshot = _network_snapshot(None)
+    target = None
+    for adapter in snapshot.get("adapters") or []:
+        if str(adapter.get("pnp") or "").lower() == device.lower():
+            target = adapter
+            break
+    if target is None:
+        return False, "Устройство не найдено — возможно, оно уже удалено"
+    if not _is_radmin_adapter(target):
+        return False, "Это не Radmin-адаптер — не трогаем"
+
+    try:
+        r = subprocess.run(
+            ["pnputil", "/remove-device", device],
+            capture_output=True, timeout=30, check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except Exception as exc:
+        return False, f"pnputil не запустился: {exc}"
+
+    out = (r.stdout or b"").decode("utf-8", errors="replace").strip()
+    err = (r.stderr or b"").decode("utf-8", errors="replace").strip()
+    if r.returncode != 0:
+        detail = err or out or f"код {r.returncode}"
+        if "access" in detail.lower() or "отказано" in detail.lower():
+            return False, "Нужны права администратора — перезапустите приложение от админа"
+        return False, f"Не удалось удалить интерфейс: {detail[:300]}"
+    return True, f"Интерфейс {target.get('name') or device} удалён"
 
 
 def kill_process(pid: int, protected_pids: set[int] | None = None) -> tuple[bool, str]:
@@ -717,7 +1306,6 @@ def kill_process(pid: int, protected_pids: set[int] | None = None) -> tuple[bool
 
     try:
         name = proc.name()
-        cmdline = " ".join(proc.cmdline())
     except (psutil.Error, OSError) as exc:
         return False, f"Не удалось прочитать процесс: {exc}"
 
@@ -725,7 +1313,7 @@ def kill_process(pid: int, protected_pids: set[int] | None = None) -> tuple[bool
         exe = proc.exe()
     except (psutil.Error, OSError):
         exe = ""
-    if _known_process_reason(f"{name} {exe}", cmdline) is None:
+    if _known_process_reason(name, exe) is None:
         return False, "Процесс не похож на известный VPN/прокси — не трогаем"
 
     try:

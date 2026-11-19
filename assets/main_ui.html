@@ -507,6 +507,8 @@
   }
   .diag-btn-kill { background: #7f2b2b; color: #fff; }
   .diag-btn-kill:hover { background: #a33636; }
+  .diag-btn-remove { background: #7a4a12; color: #ffd9a0; }
+  .diag-btn-remove:hover { background: #9a5f18; }
   .diag-btn-issue { background: #2b3a5a; color: #9dc0ff; }
   .diag-btn-issue:hover { background: #34486e; }
   .diag-actions {
@@ -1888,7 +1890,13 @@
 
     window.reconnectFromDiagnostics = function() {
       window.closeDiagnostics();
-      if (window.ObxodCube) window.ObxodCube.setBusy(false);
+      if (window.ObxodCube && window.ObxodCube.requestToggle) {
+        // Снимаем возможную блокировку и запускаем тот же оптимистичный
+        // путь, что и клик по кубу: анимация + блокировка + запрос в ядро.
+        window.ObxodCube.setBusy(false);
+        window.ObxodCube.requestToggle();
+        return;
+      }
       sendToPython({ action: "toggle_connection" });
     };
 
@@ -1896,6 +1904,13 @@
       const summary = document.getElementById('diagSummary');
       if (summary) summary.textContent = 'Завершаю процесс и повторяю проверку...';
       sendToPython({ action: "kill_conflict_process", pid: pid });
+    };
+
+    window.removeDiagInterface = function(device) {
+      if (!device) return;
+      const summary = document.getElementById('diagSummary');
+      if (summary) summary.textContent = 'Удаляю интерфейс и повторяю проверку...';
+      sendToPython({ action: "remove_conflict_interface", device: device });
     };
 
     window.openDiagIssue = function(url) {
@@ -1958,6 +1973,16 @@
           );
           killBtn.onclick = function() { window.killDiagProcess(proc.pid); };
           actions.appendChild(killBtn);
+        });
+        const extra = Array.isArray(issue.actions) ? issue.actions : [];
+        extra.forEach(function(item) {
+          if (!item || item.action !== 'remove_interface' || !item.device) return;
+          const btn = diagNode(
+            'button', 'diag-btn-remove',
+            item.label || 'Удалить интерфейс'
+          );
+          btn.onclick = function() { window.removeDiagInterface(item.device); };
+          actions.appendChild(btn);
         });
         if (issue.issue_url) {
           const issueBtn = diagNode('button', 'diag-btn-issue', 'Сообщить в Issues');

@@ -16,6 +16,8 @@
  *   play(name, opts?)
  *   stopAccent()
  *   registerAnimation(name, definition)
+ *   setBusy(on)
+ *   requestToggle()
  *   setWindowVisible(visible)
  *   onToggle(callback)
  */
@@ -374,6 +376,12 @@
     }
   }
 
+  /** Публичный оптимистичный тоггл для внешних кнопок (диагностика и т.п.). */
+  function requestToggle() {
+    ensureMounted();
+    toggleConnection();
+  }
+
   function applyStatus(status, message) {
     const st = status || "stopped";
     const msg = message || "";
@@ -481,6 +489,7 @@
     setWindowVisible: setWindowVisible,
     setBusy: setBusy,
     isBusy: isBusy,
+    requestToggle: requestToggle,
     refreshAnchor: refreshAnchor,
     onToggle: onToggle,
     /** @private debug */

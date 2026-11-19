@@ -1746,6 +1746,16 @@
       return div.innerHTML;
     }
 
+    // Имена конфигов часто начинаются с эмодзи-флага страны или молнии.
+    // WebView2 на Windows рисует их как «RU»/квадратики, поэтому подменяем
+    // на инлайн-SVG (assets/flags.js). Без модуля — обычный escape.
+    function renderName(text) {
+      if (window.ObxodFlags && window.ObxodFlags.renderName) {
+        return window.ObxodFlags.renderName(text);
+      }
+      return escapeHtml(text);
+    }
+
     function tagClass(tag) {
       const t = String(tag || '').toLowerCase();
       if (t === 'tls') return 'tls';
@@ -1824,7 +1834,7 @@
 
       if (activeProvider) {
         const p = providers.find(x => x.name === activeProvider);
-        nameEl.textContent = activeProvider;
+        nameEl.innerHTML = renderName(activeProvider);
         tagsEl.innerHTML = p
           ? `<span class="picker-tag count">${p.count}</span>`
           : '';
@@ -1849,7 +1859,7 @@
 
       if (selectedConfigIndex >= 0 && selectedConfigIndex < configs.length) {
         const sel = configs[selectedConfigIndex];
-        nameEl.textContent = sel.name || ('Config #' + selectedConfigIndex);
+        nameEl.innerHTML = renderName(sel.name || ('Config #' + selectedConfigIndex));
         tagsEl.innerHTML = buildTags(sel);
       } else {
         nameEl.textContent = 'Выберите конфиг';
@@ -1867,7 +1877,7 @@
           item.className = 'picker-item' + (p.name === activeProvider ? ' selected' : '');
           item.innerHTML = `
             <div class="picker-info">
-              <div class="picker-name">${escapeHtml(p.name)}</div>
+              <div class="picker-name">${renderName(p.name)}</div>
               <div class="picker-tags"><span class="picker-tag info">${p.count} шт.</span></div>
             </div>
           `;

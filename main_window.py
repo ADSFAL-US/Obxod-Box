@@ -94,6 +94,7 @@ _CUBE_ASSETS: tuple[tuple[str, str], ...] = (
     ("script", "cube/animations/connecting.js"),
     ("script", "cube/animations/network_down.js"),
     ("script", "onboarding.js"),
+    ("script", "flags.js"),
 )
 
 

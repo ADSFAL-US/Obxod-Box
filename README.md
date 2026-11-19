@@ -134,4 +134,3 @@ MIT License — см. файл [LICENSE](LICENSE) для деталей.
 ## 📞 Поддержка
 
 - Issues: [GitHub Issues](https://github.com/ADSFAL-US/Obxod-Box/issues)
-- Discussions: [GitHub Discussions](https://github.com/ADSFAL-US/Obxod-Box/discussions)

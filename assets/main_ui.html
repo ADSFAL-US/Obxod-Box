@@ -2075,11 +2075,11 @@
       sendToPython({ action: "kill_conflict_process", pid: pid });
     };
 
-    window.removeDiagInterface = function(device) {
+    window.disableDiagInterface = function(device) {
       if (!device) return;
       const summary = document.getElementById('diagSummary');
-      if (summary) summary.textContent = 'Удаляю интерфейс и повторяю проверку...';
-      sendToPython({ action: "remove_conflict_interface", device: device });
+      if (summary) summary.textContent = 'Отключаю интерфейс и повторяю проверку...';
+      sendToPython({ action: "disable_conflict_interface", device: device });
     };
 
     window.openDiagIssue = function(url) {
@@ -2145,12 +2145,12 @@
         });
         const extra = Array.isArray(issue.actions) ? issue.actions : [];
         extra.forEach(function(item) {
-          if (!item || item.action !== 'remove_interface' || !item.device) return;
+          if (!item || item.action !== 'disable_interface' || !item.device) return;
           const btn = diagNode(
             'button', 'diag-btn-remove',
-            item.label || 'Удалить интерфейс'
+            item.label || 'Отключить интерфейс'
           );
-          btn.onclick = function() { window.removeDiagInterface(item.device); };
+          btn.onclick = function() { window.disableDiagInterface(item.device); };
           actions.appendChild(btn);
         });
         if (issue.issue_url) {

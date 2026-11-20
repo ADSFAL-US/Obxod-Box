@@ -19,7 +19,7 @@ from toga.handlers import WeakrefCallable
 from toga.style import Pack
 
 from config import VALID_MODES
-from network_diagnostics import kill_process, remove_interface, run_diagnostics
+from network_diagnostics import disable_interface, kill_process, run_diagnostics
 from network_watcher import NetworkEvent, NetworkState, NetworkWatcher
 from platform_info import get_platform, supports_system_tray
 from platform_tray import TrayCallbacks, create_tray
@@ -1166,9 +1166,9 @@ class MainWindow:
             asyncio.create_task(
                 self._handle_kill_conflict_process(msg.get("pid"))
             )
-        elif action == "remove_conflict_interface":
+        elif action == "disable_conflict_interface":
             asyncio.create_task(
-                self._handle_remove_conflict_interface(msg.get("device"))
+                self._handle_disable_conflict_interface(msg.get("device"))
             )
         elif action == "open_url":
             asyncio.create_task(self._handle_open_url(msg.get("url")))
@@ -1675,16 +1675,16 @@ class MainWindow:
             return
         await self._run_diagnostics("after_kill")
 
-    async def _handle_remove_conflict_interface(self, device) -> None:
+    async def _handle_disable_conflict_interface(self, device) -> None:
         if not isinstance(device, str) or not device.strip():
-            logger.warning("remove_conflict_interface: плохой device=%r", device)
+            logger.warning("disable_conflict_interface: плохой device=%r", device)
             return
         device = device.strip()
         allowed = False
         for issue in (self._last_diagnostics or {}).get("issues", []):
             for item in issue.get("actions") or []:
                 if (
-                    item.get("action") == "remove_interface"
+                    item.get("action") == "disable_interface"
                     and str(item.get("device") or "").lower() == device.lower()
                 ):
                     allowed = True
@@ -1693,7 +1693,7 @@ class MainWindow:
                 break
         if not allowed:
             logger.warning(
-                "remove_conflict_interface: устройство %s не найдено в диагностике",
+                "disable_conflict_interface: устройство %s не найдено в диагностике",
                 device,
             )
             await self._push_js_safe(
@@ -1701,20 +1701,20 @@ class MainWindow:
                 "window.showDiagnosticsError('Устройство не найдено в результатах проверки');"
             )
             return
-        logger.info("Удаляю конфликтующий интерфейс %s", device)
-        ok, detail = await asyncio.to_thread(remove_interface, device)
+        logger.info("Отключаю конфликтующий интерфейс %s", device)
+        ok, detail = await asyncio.to_thread(disable_interface, device)
         if not ok:
             await self._push_js_safe(
                 "window.showDiagnosticsError && "
                 "window.showDiagnosticsError("
-                + json.dumps(f"Не удалось удалить интерфейс: {detail}", ensure_ascii=False)
+                + json.dumps(f"Не удалось отключить интерфейс: {detail}", ensure_ascii=False)
                 + ");"
             )
             return
-        # После удаления интерфейса маршруты и NDIS-стек нужно пересобрать:
+        # После отключения интерфейса маршруты и NDIS-стек нужно пересобрать:
         # без перезапуска Xray соединение остаётся заблокированным.
         await self._restart_xray_after_interface_removal()
-        await self._run_diagnostics("after_remove_interface")
+        await self._run_diagnostics("after_disable_interface")
 
     async def _restart_xray_after_interface_removal(self) -> None:
         running = await asyncio.to_thread(lambda: self.xray_manager.is_running)
@@ -1725,11 +1725,11 @@ class MainWindow:
             return
         try:
             async with self._restart_lock:
-                logger.info("Перезапуск Xray после удаления конфликтующего интерфейса")
+                logger.info("Перезапуск Xray после отключения конфликтующего интерфейса")
                 await self.xray_manager.restart(record["raw"])
         except Exception as e:
             logger.error(
-                "Перезапуск после удаления интерфейса упал: %s", e, exc_info=True
+                "Перезапуск после отключения интерфейса упал: %s", e, exc_info=True
             )
 
     async def _handle_open_url(self, url) -> None:

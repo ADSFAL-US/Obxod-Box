@@ -470,10 +470,11 @@ def _is_own_tun(name: str) -> bool:
     return "obxod" in low or TUN_INTERFACE_NAME.lower() == low
 
 
-# Radmin VPN: miniport RvNetMP60 после обновления умеет «залипать» в состоянии
-# ошибки драйвера. Адаптер при этом не поднимается и маршрутов не держит, но
-# NDIS-фильтр продолжает резать трафик — отключение адаптера не помогает,
-# лечится только удалением устройства (pnputil /remove-device).
+# Radmin VPN: miniport RvNetMP60 умеет «залипать» в состоянии ошибки драйвера.
+# Адаптер при этом не поднимается и маршрутов не держит, но NDIS-фильтр
+# продолжает резать трафик. Лечим отключением адаптера и остановкой служб
+# Radmin — драйвер НЕ удаляем: после pnputil /remove-device Radmin не может
+# подключиться до ручной переустановки драйвера.
 RADMIN_SERVICES = frozenset({"rvnetmp60", "rvnetmp"})
 RADMIN_PROCESS_NAMES = frozenset({"rvcontrolsvc.exe", "rvnetsvc.exe", "radmin.exe"})
 
@@ -576,8 +577,8 @@ def _radmin_actions(adapters: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if not device:
             continue
         actions.append({
-            "action": "remove_interface",
-            "label": "Удалить интерфейс Radmin VPN",
+            "action": "disable_interface",
+            "label": "Отключить интерфейс Radmin VPN",
             "device": device,
             "name": str(adapter.get("name") or "Radmin VPN"),
         })
@@ -1137,9 +1138,9 @@ def run_diagnostics(
             )
         if radmin_conflicts:
             suggestion = (
-                "Radmin VPN после обновления блокирует соединение намертво: "
-                "завершение процесса не помогает. Удалите его интерфейс — "
-                "Radmin пересоздаст его при следующем запуске."
+                "Radmin VPN блокирует соединение намертво: завершение процесса "
+                "не помогает. Отключите его интерфейс — Radmin поднимет его "
+                "сам при следующем подключении."
             )
         issues.append(DiagnosticIssue(
             code="interfering_process",
@@ -1156,9 +1157,10 @@ def run_diagnostics(
     #  1) miniport в состоянии сбоя драйвера: адаптер не поднимается, но его
     #     NDIS-фильтр остаётся в стеке и режет трафик;
     #  2) Radmin запущен раньше нас и «залип»: адаптер выключен, маршрутов нет,
-    #     но соединение блокируется, пока интерфейс не удалить.
-    # В обоих случаях помогает только удаление устройства — отключение
-    # адаптера не снимает блокировку.
+    #     но соединение блокируется, пока интерфейс не отключить.
+    # В обоих случаях помогает отключение адаптера + остановка служб Radmin.
+    # Драйвер не удаляем: после pnputil /remove-device Radmin не подключается
+    # до ручной переустановки драйвера.
     radmin_all = _radmin_adapters(snapshot)
     broken_radmin = _broken_radmin_adapters(snapshot)
     if broken_radmin:
@@ -1171,11 +1173,11 @@ def run_diagnostics(
             detail=(
                 f"Адаптер {names} в состоянии сбоя драйвера (код {codes}). "
                 "Он не поднят и не держит маршрут, но его фильтр остаётся в стеке "
-                "NDIS и блокирует соединение — отключение адаптера не помогает."
+                "NDIS и блокирует соединение."
             ),
             suggestion=(
-                "Удалите интерфейс Radmin VPN и переподключитесь. "
-                "Radmin пересоздаст его при следующем запуске."
+                "Отключите интерфейс Radmin VPN и переподключитесь. "
+                "Radmin поднимет его сам при следующем подключении."
             ),
             actions=_radmin_actions(broken_radmin),
         ))
@@ -1190,12 +1192,12 @@ def run_diagnostics(
             title="Radmin VPN блокирует соединение",
             detail=(
                 "Radmin VPN был запущен раньше Obxod-BOX и держит сетевой фильтр. "
-                "Адаптер выключен и маршрутов не держит, но соединение блокируется — "
-                "отключение Radmin не помогает."
+                "Адаптер выключен и маршрутов не держит, но соединение блокируется, "
+                "пока его службы работают."
             ),
             suggestion=(
-                "Удалите интерфейс Radmin VPN и переподключитесь. "
-                "Radmin пересоздаст его при следующем запуске."
+                "Отключите интерфейс Radmin VPN и переподключитесь. "
+                "Radmin поднимет его сам при следующем подключении."
             ),
             actions=_radmin_actions(radmin_all),
         ))
@@ -1242,23 +1244,75 @@ def run_diagnostics(
     )
 
 
-def remove_interface(device: str) -> tuple[bool, str]:
-    """Удаляет сломанный сетевой интерфейс (PnP-устройство).
+def _run_hidden(args: list[str], timeout: float = 30.0) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        args,
+        capture_output=True, timeout=timeout, check=False,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
 
-    Нужно для Radmin VPN: его miniport после обновления залипает в состоянии
-    ошибки и продолжает блокировать трафик, даже когда адаптер выключен.
-    Отключение адаптера не помогает — лечится только удалением устройства.
-    Radmin пересоздаст интерфейс при следующем запуске.
 
-    Устройство удаляется только если оно действительно VPN-адаптер: имя
-    устройства сверяется с таблицей драйверов, чтобы мост не превратился
-    в универсальный «удали любое устройство».
+def _stop_radmin_services() -> list[str]:
+    """Останавливает службы клиента Radmin VPN (best effort).
+
+    Radmin запускает их сам при нажатии «Подключиться», поэтому остановка
+    ничего не ломает — в отличие от удаления драйвера. Имена служб у разных
+    версий отличаются, поэтому ищем их по имени и по пути к исполняемому файлу.
+    """
+    script = (
+        "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; "
+        "$ErrorActionPreference = 'SilentlyContinue'; "
+        "$svc = Get-CimInstance Win32_Service | Where-Object { "
+        "$_.ServiceType -notmatch 'Driver' -and ("
+        "$_.Name -match 'rvcontrolsvc|rvnetsvc' -or "
+        "$_.PathName -match 'rvcontrolsvc|rvnetsvc') }; "
+        "$stopped = @(); "
+        "foreach ($s in $svc) { "
+        "if ($s.State -eq 'Stopped') { continue }; "
+        "Stop-Service -Name $s.Name -Force -ErrorAction SilentlyContinue; "
+        "$now = Get-Service -Name $s.Name -ErrorAction SilentlyContinue; "
+        "if ($now -and $now.Status -eq 'Stopped') { $stopped += $s.Name } }; "
+        "$stopped | ConvertTo-Json -Compress"
+    )
+    try:
+        r = _run_hidden([
+            "powershell", "-NoProfile", "-NonInteractive", "-Command", script,
+        ], timeout=30)
+    except Exception as exc:
+        logger.debug("остановка служб Radmin: %s", exc)
+        return []
+    raw = (r.stdout or b"").decode("utf-8", errors="replace").strip()
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        logger.debug("остановка служб Radmin: %s", raw[:200])
+        return []
+    if isinstance(data, str):
+        return [data]
+    if isinstance(data, list):
+        return [str(item) for item in data if item]
+    return []
+
+
+def disable_interface(device: str) -> tuple[bool, str]:
+    """Отключает сетевой интерфейс Radmin VPN, не удаляя драйвер.
+
+    Раньше здесь вызывался ``pnputil /remove-device``: он выдёргивал miniport
+    вместе с драйвером, и Radmin после этого не подключался до ручной
+    переустановки драйвера. Теперь адаптер только отключается (а при сбое
+    драйвера — через ``pnputil /disable-device``), а службы Radmin
+    останавливаются: клиент поднимает их сам при следующем подключении.
+
+    Устройство трогаем только если это действительно Radmin-адаптер, чтобы
+    мост не превратился в универсальный «отключи любое устройство».
     """
     device = (device or "").strip()
     if not device:
         return False, "Не указан идентификатор устройства"
     if sys.platform != "win32":
-        return False, "Удаление интерфейса поддерживается только в Windows"
+        return False, "Отключение интерфейса поддерживается только в Windows"
 
     snapshot = _network_snapshot(None)
     target = None
@@ -1267,27 +1321,63 @@ def remove_interface(device: str) -> tuple[bool, str]:
             target = adapter
             break
     if target is None:
-        return False, "Устройство не найдено — возможно, оно уже удалено"
+        return False, "Устройство не найдено — возможно, оно уже отключено"
     if not _is_radmin_adapter(target):
         return False, "Это не Radmin-адаптер — не трогаем"
 
-    try:
-        r = subprocess.run(
-            ["pnputil", "/remove-device", device],
-            capture_output=True, timeout=30, check=False,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-    except Exception as exc:
-        return False, f"pnputil не запустился: {exc}"
+    name = str(target.get("name") or "")
 
-    out = (r.stdout or b"").decode("utf-8", errors="replace").strip()
-    err = (r.stderr or b"").decode("utf-8", errors="replace").strip()
-    if r.returncode != 0:
-        detail = err or out or f"код {r.returncode}"
-        if "access" in detail.lower() or "отказано" in detail.lower():
-            return False, "Нужны права администратора — перезапустите приложение от админа"
-        return False, f"Не удалось удалить интерфейс: {detail[:300]}"
-    return True, f"Интерфейс {target.get('name') or device} удалён"
+    disabled = False
+    if name:
+        try:
+            r = _run_hidden([
+                "powershell", "-NoProfile", "-NonInteractive", "-Command",
+                f"Disable-NetAdapter -Name '{name.replace(chr(39), chr(39) * 2)}' "
+                "-Confirm:$false -ErrorAction Stop",
+            ])
+        except Exception as exc:
+            logger.debug("Disable-NetAdapter %s: %s", name, exc)
+            r = None
+        if r is not None:
+            if r.returncode == 0:
+                disabled = True
+            else:
+                logger.debug(
+                    "Disable-NetAdapter %s: код %s (%s)",
+                    name, r.returncode,
+                    ((r.stderr or b"") + (r.stdout or b"")).decode(
+                        "utf-8", errors="replace"
+                    )[:200],
+                )
+
+    # Адаптер в состоянии сбоя драйвера Disable-NetAdapter не берёт —
+    # отключаем само PnP-устройство (драйвер при этом остаётся в системе).
+    if not disabled:
+        try:
+            r = _run_hidden(["pnputil", "/disable-device", device])
+        except Exception as exc:
+            return False, f"pnputil не запустился: {exc}"
+        out = ((r.stdout or b"") + (r.stderr or b"")).decode(
+            "utf-8", errors="replace"
+        ).strip()
+        if r.returncode != 0:
+            detail = out or f"код {r.returncode}"
+            if "access" in detail.lower() or "отказано" in detail.lower():
+                return False, (
+                    "Нужны права администратора — перезапустите приложение от админа"
+                )
+            return False, f"Не удалось отключить интерфейс: {detail[:300]}"
+
+    label = name or device
+    # Службы останавливаем после отключения адаптера: Radmin поднимает их сам
+    # при следующем подключении, а до этого они не должны вернуть фильтр.
+    stopped = _stop_radmin_services()
+    if stopped:
+        return True, (
+            f"Интерфейс {label} отключён, службы Radmin остановлены "
+            f"({', '.join(stopped)})"
+        )
+    return True, f"Интерфейс {label} отключён"
 
 
 def kill_process(pid: int, protected_pids: set[int] | None = None) -> tuple[bool, str]:

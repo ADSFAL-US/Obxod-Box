@@ -2075,6 +2075,12 @@
       sendToPython({ action: "kill_conflict_process", pid: pid });
     };
 
+    window.killDiagProcesses = function(pids) {
+      const summary = document.getElementById('diagSummary');
+      if (summary) summary.textContent = 'Завершаю HAPP и повторяю проверку...';
+      sendToPython({ action: "kill_conflict_processes", pids: pids });
+    };
+
     window.disableDiagInterface = function(device) {
       if (!device) return;
       const summary = document.getElementById('diagSummary');
@@ -2130,12 +2136,20 @@
         }
 
         const actions = diagNode('div', 'diag-issue-actions');
+        const extra = Array.isArray(issue.actions) ? issue.actions : [];
+        const groupedKillPids = new Set();
+        extra.forEach(function(item) {
+          if (item && item.action === 'kill_processes' && Array.isArray(item.pids)) {
+            item.pids.forEach(function(pid) { groupedKillPids.add(String(pid)); });
+          }
+        });
         const procs = Array.isArray(issue.processes) ? issue.processes.slice() : [];
         if (!procs.length && issue.pid) {
           procs.push({ pid: issue.pid, name: issue.process_name || 'процесс' });
         }
         procs.forEach(function(proc) {
           if (!proc || !proc.pid) return;
+          if (groupedKillPids.has(String(proc.pid))) return;
           const killBtn = diagNode(
             'button', 'diag-btn-kill',
             'Завершить ' + (proc.name || 'процесс')
@@ -2143,8 +2157,20 @@
           killBtn.onclick = function() { window.killDiagProcess(proc.pid); };
           actions.appendChild(killBtn);
         });
-        const extra = Array.isArray(issue.actions) ? issue.actions : [];
         extra.forEach(function(item) {
+          if (
+            item &&
+            item.action === 'kill_processes' &&
+            Array.isArray(item.pids) &&
+            item.pids.length
+          ) {
+            const killBtn = diagNode(
+              'button', 'diag-btn-kill', item.label || 'Завершить процессы'
+            );
+            killBtn.onclick = function() { window.killDiagProcesses(item.pids); };
+            actions.appendChild(killBtn);
+            return;
+          }
           if (!item || item.action !== 'disable_interface' || !item.device) return;
           const btn = diagNode(
             'button', 'diag-btn-remove',

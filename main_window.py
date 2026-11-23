@@ -1166,6 +1166,10 @@ class MainWindow:
             asyncio.create_task(
                 self._handle_kill_conflict_process(msg.get("pid"))
             )
+        elif action == "kill_conflict_processes":
+            asyncio.create_task(
+                self._handle_kill_conflict_processes(msg.get("pids"))
+            )
         elif action == "disable_conflict_interface":
             asyncio.create_task(
                 self._handle_disable_conflict_interface(msg.get("device"))
@@ -1674,6 +1678,85 @@ class MainWindow:
             )
             return
         await self._run_diagnostics("after_kill")
+
+    async def _handle_kill_conflict_processes(self, pids) -> None:
+        if not isinstance(pids, list) or not pids:
+            logger.warning("kill_conflict_processes: плохой список PID=%r", pids)
+            await self._push_js_safe(
+                "window.showDiagnosticsError && "
+                "window.showDiagnosticsError('Некорректный список процессов HAPP');"
+            )
+            return
+
+        normalized = []
+        invalid_pid = False
+        for value in pids:
+            if isinstance(value, bool):
+                invalid_pid = True
+                break
+            try:
+                pid = int(value)
+            except (TypeError, ValueError):
+                invalid_pid = True
+                break
+            if pid <= 0:
+                invalid_pid = True
+                break
+            if pid not in normalized:
+                normalized.append(pid)
+        if invalid_pid:
+            logger.warning("kill_conflict_processes: некорректный PID в %r", pids)
+            await self._push_js_safe(
+                "window.showDiagnosticsError && "
+                "window.showDiagnosticsError('Некорректный список процессов HAPP');"
+            )
+            return
+
+        allowed_groups = []
+        for issue in (self._last_diagnostics or {}).get("issues", []):
+            if issue.get("code") != "tun_connection_refused":
+                continue
+            for item in issue.get("actions") or []:
+                if item.get("action") != "kill_processes":
+                    continue
+                group = {
+                    value for value in item.get("pids") or []
+                    if isinstance(value, int) and not isinstance(value, bool)
+                }
+                if group:
+                    allowed_groups.append(group)
+
+        if (
+            not normalized
+            or set(normalized) not in allowed_groups
+            or any(pid not in self._diagnostics_pids for pid in normalized)
+        ):
+            logger.warning(
+                "kill_conflict_processes: PID не подтверждены последней диагностикой: %r",
+                normalized,
+            )
+            await self._push_js_safe(
+                "window.showDiagnosticsError && "
+                "window.showDiagnosticsError('Список процессов устарел — проверьте сеть снова');"
+            )
+            return
+
+        failures = []
+        for pid in normalized:
+            ok, detail = await asyncio.to_thread(kill_process, pid)
+            if not ok:
+                failures.append(f"{self._diagnostics_pids.get(pid, pid)}: {detail}")
+
+        await self._run_diagnostics("after_kill")
+        if failures:
+            message = "Не удалось полностью завершить HAPP: " + "; ".join(failures)
+            logger.warning("%s", message)
+            await self._push_js_safe(
+                "window.showDiagnosticsError && "
+                "window.showDiagnosticsError("
+                + json.dumps(message, ensure_ascii=False)
+                + ");"
+            )
 
     async def _handle_disable_conflict_interface(self, device) -> None:
         if not isinstance(device, str) or not device.strip():

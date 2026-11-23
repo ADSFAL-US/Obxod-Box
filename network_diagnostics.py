@@ -73,6 +73,8 @@ VPN_DESC_HINTS = (
 # подстрочный поиск по командной строке давал ложные срабатывания
 # (Code.exe с флагом --use-angle=d3d11-warp-webgl, git.exe с путём к xray).
 VPN_PROCESS_NAMES: dict[str, str] = {
+    "happ.exe": "HAPP",
+    "happd.exe": "HAPP",
     "rvcontrolsvc.exe": "Radmin VPN",
     "rvnetsvc.exe": "Radmin VPN",
     "hamachi-2.exe": "Hamachi",
@@ -154,6 +156,15 @@ _LOG_RULES: tuple[tuple[re.Pattern[str], str, str, str], ...] = (
         "Закройте приложение, которое слушает этот порт, и переподключитесь.",
     ),
     (
+        re.compile(
+            r"proxy/tun:\s*connection (?:was )?(?:refused|reset by peer)",
+            re.I,
+        ),
+        "tun_connection_refused",
+        "Соединение через TUN отклонено",
+        "Проверьте, не мешает ли другой VPN-клиент отдельным соединениям через TUN.",
+    ),
+    (
         re.compile(r"permission denied|operation not permitted|access is denied", re.I),
         "permission_denied",
         "Xray не хватает прав",
@@ -161,8 +172,9 @@ _LOG_RULES: tuple[tuple[re.Pattern[str], str, str, str], ...] = (
     ),
     (
         re.compile(
+            r"(?!.+proxy/tun:\s*connection (?:was )?(?:refused|reset by peer))"
             r"(wintun|tun|tap).*(fail|error|denied|cannot|unable|already)"
-            r"|(fail|error|denied|cannot|unable).*(wintun|tun|tap)",
+            r"|(fail|error|denied|cannot|unable).*(wintun|tap)",
             re.I,
         ),
         "tun_create_failed",
@@ -301,6 +313,35 @@ def _killable_owner(owner: dict[str, Any] | None) -> list[dict[str, Any]]:
     if _known_process_reason(name) is None:
         return []
     return [owner]
+
+
+def _happ_processes() -> list[dict[str, Any]]:
+    """Возвращает только точные процессы HAPP, найденные в системе."""
+    if psutil is None:
+        return []
+    try:
+        iterator = psutil.process_iter(["pid", "name", "exe"])
+    except Exception as exc:
+        logger.warning("Cannot enumerate processes while checking HAPP: %s", exc)
+        return []
+
+    found = []
+    for proc in iterator:
+        try:
+            name = str(proc.info.get("name") or "")
+            exe = str(proc.info.get("exe") or "")
+            if _exe_basename(name, exe) not in ("happ.exe", "happd.exe"):
+                continue
+            pid = int(proc.info.get("pid") or 0)
+            if pid:
+                found.append({
+                    "pid": pid,
+                    "name": name or Path(exe).name,
+                    "reason": "HAPP",
+                })
+        except (psutil.Error, OSError, ValueError):
+            continue
+    return found
 
 
 def _service_pid(service: str) -> int | None:
@@ -1065,12 +1106,32 @@ def run_diagnostics(
                 if code in seen_codes or not pattern.search(clean):
                     continue
                 seen_codes.add(code)
+                severity = "error"
+                processes = []
+                actions = []
+                if code == "tun_connection_refused":
+                    processes = _happ_processes()
+                    if traffic_ok is True:
+                        severity = "warning"
+                    if processes:
+                        title = "HAPP может мешать соединениям через TUN"
+                        suggestion = (
+                            "HAPP ещё запущен в фоне. Завершите его кнопкой ниже "
+                            "и переподключитесь."
+                        )
+                        actions.append({
+                            "action": "kill_processes",
+                            "pids": [proc["pid"] for proc in processes],
+                            "label": "Завершить HAPP",
+                        })
                 issues.append(DiagnosticIssue(
                     code=code,
-                    severity="error",
+                    severity=severity,
                     title=title,
                     detail=clean[:500],
                     suggestion=suggestion,
+                    processes=processes,
+                    actions=actions,
                 ))
                 break
 

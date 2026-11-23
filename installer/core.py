@@ -353,6 +353,8 @@ class ObxodBoxInstaller:
         for item in self.temp_dir.iterdir():
             dest = self.install_path / item.name
             if item.is_dir():
+                if item.name == "cfg" and dest.exists():
+                    continue
                 if dest.exists():
                     shutil.rmtree(dest, ignore_errors=True)
                 shutil.copytree(item, dest, dirs_exist_ok=True)

@@ -394,9 +394,15 @@ class _PingSession:
         (TCP/CONNECT/TLS), как его видит пользователь при первом запросе.
         """
         handshake = measure == "handshake"
-        t0 = time.perf_counter()
-        if handshake or self._sock is None:
+        if handshake:
+            t0 = time.perf_counter()
             self.connect()
+        else:
+            # Для замера «по туннелю» рукопожатие не должно попадать в цифру,
+            # даже если прогрев выключен и сокета ещё нет.
+            if self._sock is None:
+                self.connect()
+            t0 = time.perf_counter()
         status, headers = self._send_request()
         elapsed_ms = (time.perf_counter() - t0) * 1000.0
         if not self._drain_body(status, headers):
@@ -1128,6 +1134,8 @@ class XrayManager:  # pylint: disable=too-many-public-methods
                             self._warmup_ping_session(
                                 session, opts["warmup_count"], timeout, warmup_extra
                             )
+                            # Повторный запрос тоже уходит в сеть — считаем его.
+                            sent += 1
                             samples.append(session.request(measure))
                         except Exception as warm_exc:
                             last_error = warm_exc

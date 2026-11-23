@@ -37,7 +37,7 @@ class HappDiagnosticsTests(unittest.TestCase):
         self.assertEqual(network_diagnostics._known_process_reason("Happ.exe"), "HAPP")
         self.assertIsNone(network_diagnostics._known_process_reason("HappHelper.exe"))
 
-    def test_tun_refusals_offer_one_happ_termination_action(self):
+    def _run_tun_report(self, probe_ok: bool):
         with tempfile.TemporaryDirectory() as temp_dir:
             log_file = Path(temp_dir) / "xray.log"
             log_file.write_text(
@@ -71,7 +71,9 @@ class HappDiagnosticsTests(unittest.TestCase):
                 patch.object(network_diagnostics, "_resolve_probe_ip", return_value="1.1.1.1"),
                 patch.object(network_diagnostics, "_network_snapshot", return_value=snapshot),
                 patch.object(
-                    network_diagnostics, "_probe_with_retries", return_value=(True, None)
+                    network_diagnostics,
+                    "_probe_with_retries",
+                    return_value=(probe_ok, None if probe_ok else "timeout"),
                 ),
                 patch.object(network_diagnostics, "_conflicting_adapters", return_value=[]),
                 patch.object(network_diagnostics, "_radmin_adapters", return_value=[]),
@@ -82,11 +84,14 @@ class HappDiagnosticsTests(unittest.TestCase):
                     network_diagnostics, "_happ_processes", return_value=happ_processes
                 ),
             ):
-                report = network_diagnostics.run_diagnostics(manager, Config())
+                return network_diagnostics.run_diagnostics(manager, Config())
 
-        self.assertTrue(report.traffic_ok)
+    def test_tun_refusals_offer_one_happ_termination_action(self):
+        report = self._run_tun_report(probe_ok=False)
+
+        self.assertFalse(report.traffic_ok)
         issue = next(i for i in report.issues if i.code == "tun_connection_refused")
-        self.assertEqual(issue.severity, "warning")
+        self.assertEqual(issue.severity, "error")
         self.assertEqual(
             issue.actions,
             [{
@@ -96,6 +101,13 @@ class HappDiagnosticsTests(unittest.TestCase):
             }],
         )
         self.assertNotIn("tun_create_failed", {item.code for item in report.issues})
+
+    def test_passing_probe_suppresses_all_issues(self):
+        report = self._run_tun_report(probe_ok=True)
+
+        self.assertTrue(report.traffic_ok)
+        self.assertEqual(report.issues, [])
+        self.assertTrue(report.ok)
 
 
 if __name__ == "__main__":

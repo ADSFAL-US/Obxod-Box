@@ -185,6 +185,17 @@ _LOG_RULES: tuple[tuple[re.Pattern[str], str, str, str], ...] = (
 
 _LOG_ERROR_RE = re.compile(r"\b(error|fatal|panic|failed)\b", re.I)
 
+# Замечания, которые не мешают работе: если тестовый запрос прошёл как нужно,
+# их не показываем. Структурные проблемы (нет TUN, порт не слушается, чужой
+# процесс на нашем порту) остаются в отчёте всегда.
+_ADVISORY_CODES = frozenset({
+    "interfering_process",
+    "tun_connection_refused",
+    "tun_route_missing",
+    "radmin_broken_interface",
+    "radmin_stale_interface",
+})
+
 
 @dataclass
 class DiagnosticIssue:
@@ -1112,6 +1123,7 @@ def run_diagnostics(
                 if code == "tun_connection_refused":
                     processes = _happ_processes()
                     if traffic_ok is True:
+                        # Трафик проходит — это не ошибка, а повод присмотреться.
                         severity = "warning"
                     if processes:
                         title = "HAPP может мешать соединениям через TUN"
@@ -1280,6 +1292,28 @@ def run_diagnostics(
     for issue in issues:
         if not issue.known and not issue.issue_url:
             issue.issue_url = ISSUES_URL
+
+    # 8. Тестовый запрос прошёл как нужно — соединение работает. Замечания о
+    #    возможных конфликтах в этом случае только отвлекают, поэтому их не
+    #    показываем. «Как нужно» для TUN означает, что запрос реально ушёл
+    #    через наш интерфейс: иначе успешный запрос мог пройти мимо туннеля,
+    #    и структурные проблемы (нет TUN, маршрут мимо) скрывать нельзя.
+    tun_lower = {name.lower() for name in own_tun_ifaces}
+    probe_via_tun = bool(probe_iface) and probe_iface.lower() in tun_lower
+    probe_as_expected = traffic_ok is True and (
+        not expected_tun
+        or not own_tun_ifaces
+        or not probe_iface
+        or probe_via_tun
+    )
+    if probe_as_expected:
+        suppressed = [i.code for i in issues if i.code in _ADVISORY_CODES]
+        if suppressed:
+            logger.info(
+                "Диагностика: тестовый запрос прошёл, скрываю замечания: %s",
+                ", ".join(suppressed),
+            )
+            issues = [i for i in issues if i.code not in _ADVISORY_CODES]
 
     errors = [i for i in issues if i.severity == "error"]
     warnings = [i for i in issues if i.severity != "error"]

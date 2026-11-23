@@ -31,6 +31,7 @@ from net_utils import (
     apply_mode_to_config,
     apply_proxy_security,
     apply_routing_to_config,
+    apply_transport_compat,
     download_geofiles,
     download_wintun,
     download_xray,
@@ -67,6 +68,12 @@ PING_INBOUND_TAG = "obxod-ping-in"
 PING_WARMUP_ATTEMPTS = 3
 PING_SAMPLES = 5
 PING_SAMPLE_PAUSE = 0.15
+
+# XDRIVE поднимает туннель заметно дольше остальных транспортов: сессия
+# устанавливается через внешнее хранилище и первые запросы ещё «холодные».
+# Поэтому для него держим прогрев не меньше этого времени, иначе в медиану
+# попадёт завышенный RTT.
+XDRIVE_WARMUP_EXTRA_SECONDS = 10.0
 
 PING_METHODS = ("http", "tcp", "icmp")
 PING_MEASURES = ("response", "handshake")
@@ -234,6 +241,17 @@ def _outbound_server_address(xray_config: dict) -> str | None:
             if addr:
                 return str(addr)
     return None
+
+
+def _outbound_transport(xray_config: dict) -> str:
+    """Транспорт (streamSettings.network) основного outbound-а."""
+    for ob in xray_config.get("outbounds") or []:
+        proto = str(ob.get("protocol") or "").lower()
+        if proto in ("freedom", "blackhole", "dns"):
+            continue
+        stream = ob.get("streamSettings") or {}
+        return str(stream.get("network") or stream.get("method") or "tcp").lower()
+    return "tcp"
 
 
 def _outbound_server_port(xray_config: dict) -> int | None:
@@ -829,6 +847,7 @@ class XrayManager:  # pylint: disable=too-many-public-methods
             logger.info("Физический интерфейс для outbound: %r", physical_iface)
 
         runtime = apply_mode_to_config(xray_config, mode, physical_iface=physical_iface)
+        runtime = apply_transport_compat(runtime)
 
         routing_set = self.app.config.get("routing_set")
         if routing_set:
@@ -931,6 +950,7 @@ class XrayManager:  # pylint: disable=too-many-public-methods
     # ------------------------------------------------------------------
     def _build_ping_config(self, xray_config: dict, port: int) -> dict:
         cfg = copy.deepcopy(xray_config)
+        cfg = apply_transport_compat(cfg)
 
         original_tag = None
         for ib in cfg.get("inbounds") or []:
@@ -1042,9 +1062,20 @@ class XrayManager:  # pylint: disable=too-many-public-methods
         if not url.lower().startswith(("http://", "https://")):
             raise ValueError(f"Некорректный ping-URL: {url!r}")
 
+        # XDRIVE требует длительного прогрева туннеля — добавляем время к
+        # обычному warmup, иначе первые замеры будут завышены.
+        warmup_extra = 0.0
+        if _outbound_transport(xray_config) == "xdrive":
+            warmup_extra = XDRIVE_WARMUP_EXTRA_SECONDS
+            logger.debug(
+                "Ping: транспорт xdrive — прогрев +%.0f c", warmup_extra
+            )
+
         proc, port = self._spawn_ping_xray(xray_config, timeout)
         try:
-            samples, sent, last_error = self._ping_http_samples(port, url, opts, timeout)
+            samples, sent, last_error = self._ping_http_samples(
+                port, url, opts, timeout, warmup_extra
+            )
         finally:
             try:
                 proc.kill()
@@ -1058,7 +1089,12 @@ class XrayManager:  # pylint: disable=too-many-public-methods
 
     # -- HTTP -----------------------------------------------------------
     def _ping_http_samples(
-        self, port: int, url: str, opts: dict, timeout: float
+        self,
+        port: int,
+        url: str,
+        opts: dict,
+        timeout: float,
+        warmup_extra: float = 0.0,
     ) -> tuple[list[float], int, Exception | None]:
         session = _PingSession(port, url, timeout)
         jumped = 0
@@ -1068,7 +1104,9 @@ class XrayManager:  # pylint: disable=too-many-public-methods
         measure = opts["measure"]
         try:
             if opts["warmup"] and opts["warmup_count"] > 0:
-                self._warmup_ping_session(session, opts["warmup_count"], timeout)
+                self._warmup_ping_session(
+                    session, opts["warmup_count"], timeout, warmup_extra
+                )
                 if measure == "handshake":
                     # Замеры с рукопожатием поднимают соединение заново —
                     # прогреваем только маршрут/DNS и отпускаем сокет.
@@ -1087,7 +1125,9 @@ class XrayManager:  # pylint: disable=too-many-public-methods
                     if measure == "response" and jumped < 1:
                         jumped += 1
                         try:
-                            self._warmup_ping_session(session, opts["warmup_count"], timeout)
+                            self._warmup_ping_session(
+                                session, opts["warmup_count"], timeout, warmup_extra
+                            )
                             samples.append(session.request(measure))
                         except Exception as warm_exc:
                             last_error = warm_exc
@@ -1154,7 +1194,10 @@ class XrayManager:  # pylint: disable=too-many-public-methods
 
     @staticmethod
     def _warmup_ping_session(
-        session: "_PingSession", attempts: int = PING_WARMUP_ATTEMPTS, timeout: float = 5.0
+        session: "_PingSession",
+        attempts: int = PING_WARMUP_ATTEMPTS,
+        timeout: float = 5.0,
+        min_duration: float = 0.0,
     ) -> None:
         """Доводит туннель до прогретого состояния.
 
@@ -1163,24 +1206,58 @@ class XrayManager:  # pylint: disable=too-many-public-methods
         прогревают keep-alive на выходном узле. Пока хоть один запрос
         заметно медленнее последующих, продолжаем греть — иначе в медиану
         попадёт «холодный» RTT.
+
+        min_duration задаёт минимальное время прогрева в секундах: для
+        медленно поднимающихся транспортов (XDRIVE) стабильности мало —
+        туннель должен ещё и «отстояться».
         """
         attempts = max(1, int(attempts))
+        min_duration = max(0.0, float(min_duration))
+        started = time.monotonic()
+        # Жёсткий потолок, чтобы длинный прогрев не превратился в вечный цикл.
+        # Без min_duration поведение прежнее: ровно `attempts` попыток.
+        if min_duration > 0:
+            max_attempts = attempts + int(min_duration / max(PING_SAMPLE_PAUSE, 0.01)) + 8
+        else:
+            max_attempts = attempts
+
+        # На время прогрева разрешаем более длинный таймаут: медленный
+        # транспорт (XDRIVE) может не успеть установить сессию за обычный
+        # таймаут замера. После прогрева возвращаем исходный.
+        original_timeout = session.timeout
+        if min_duration > 0:
+            session.timeout = max(original_timeout, min_duration)
+
         warmup_error: Exception | None = None
         prev: float | None = None
-        for attempt in range(attempts):
-            try:
-                elapsed = session.request()
-            except Exception as exc:
-                warmup_error = exc
-                session.close()
-                if attempt + 1 >= attempts:
+        attempt = 0
+        try:
+            while attempt < max_attempts:
+                attempt += 1
+                try:
+                    elapsed = session.request()
+                except Exception as exc:
+                    warmup_error = exc
+                    session.close()
+                else:
+                    warmup_error = None
+                    stable = prev is not None and elapsed <= prev * 1.5
+                    prev = elapsed
+                    if (
+                        stable
+                        and attempt >= attempts
+                        and (time.monotonic() - started) >= min_duration
+                    ):
+                        return
+                if (
+                    attempt >= attempts
+                    and (time.monotonic() - started) >= min_duration
+                ):
                     break
                 time.sleep(PING_SAMPLE_PAUSE)
-                continue
-            warmup_error = None
-            if prev is not None and elapsed <= prev * 1.5:
-                return
-            prev = elapsed
+        finally:
+            session.timeout = original_timeout
+
         if warmup_error is not None:
             raise RuntimeError(f"Прогрев туннеля не удался: {warmup_error}")
 

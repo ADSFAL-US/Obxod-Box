@@ -498,6 +498,137 @@ def apply_mode_to_config(xray_config: dict, mode: str, physical_iface: str | Non
     return cfg
 
 
+# Транспорты, которым нужна особая подготовка конфига.
+XDRIVE_TRANSPORT = "xdrive"
+
+
+def _xdrive_vless_accounts(ob: dict) -> list[dict]:
+    """VLESS-аккаунты outbound-а в обоих стилях записи.
+
+    Xray принимает либо ``settings.vnext[].users[]``, либо упрощённый
+    стиль, где ``id``/``encryption`` лежат прямо в ``settings``.
+    """
+    settings = ob.get("settings") or {}
+    accounts: list[dict] = []
+    if settings.get("id") or settings.get("encryption"):
+        accounts.append(settings)
+    for vnext in settings.get("vnext") or []:
+        for user in vnext.get("users") or []:
+            if isinstance(user, dict):
+                accounts.append(user)
+    return accounts
+
+
+def _xdrive_outbound(config: dict) -> dict | None:
+    """Первый outbound с транспортом xdrive (или None)."""
+    for ob in config.get("outbounds") or []:
+        stream = ob.get("streamSettings")
+        if not isinstance(stream, dict):
+            continue
+        net = str(stream.get("network") or stream.get("method") or "").lower()
+        if net == XDRIVE_TRANSPORT:
+            return ob
+    return None
+
+
+def xdrive_encryption_missing(config: dict) -> bool:
+    """True, если xdrive-конфиг идёт без шифрования на уровне транспорта.
+
+    XDRIVE ходит в бакет, а не «просто по сети», поэтому TLS тут ни при
+    чём: байты внутри бакета защищает VLESS ``encryption`` (ключ из
+    ``xray vlessenc``). Без него трафик в хранилище лежит открытым.
+    """
+    ob = _xdrive_outbound(config)
+    if ob is None:
+        return False
+    accounts = _xdrive_vless_accounts(ob)
+    if not accounts:
+        return True
+    return all(
+        str(a.get("encryption") or "").lower() in ("", "none") for a in accounts
+    )
+
+
+def apply_transport_compat(config: dict) -> dict:
+    """Приводит конфиг к требованиям отдельных транспортов.
+
+    XDRIVE (по ``validateXDrive`` в Xray-core):
+    * работает только с VLESS и не поддерживает ``flow``/``testpre`` —
+      их убираем, иначе ядро откажется стартовать;
+    * на клиенте требует включённый Mux.Cool: ``concurrency`` и
+      ``xudpConcurrency`` неотрицательные, ``xudpProxyUDP443 != "skip"``.
+      Без mux туннель не поднимается, поэтому это проверяем и падаем с
+      понятной ошибкой, а не ждём краша ядра.
+
+    ``security``/``tlsSettings`` не трогаем: внутри бакета TLS не
+    применяется, и в настройках транспорта он не описывается. Шифрование
+    обеспечивает VLESS ``encryption`` — его отсутствие не блокирует
+    запуск, но подсвечивается в UI как небезопасный конфиг.
+    """
+    ob = _xdrive_outbound(config)
+    if ob is None:
+        return config
+
+    # VLESS-специфика: flow/testpre транспортом не поддерживаются.
+    for account in _xdrive_vless_accounts(ob):
+        if str(account.get("flow") or ""):
+            logger.warning(
+                "XDRIVE: VLESS flow=%r не поддерживается — убираю",
+                account.get("flow"),
+            )
+            account["flow"] = ""
+        if account.get("testpre"):
+            logger.warning("XDRIVE: VLESS testpre не поддерживается — убираю")
+            account["testpre"] = 0
+
+    # Mux.Cool обязателен на клиенте — без него не поднимаемся.
+    mux = ob.get("mux")
+    if not isinstance(mux, dict) or not mux.get("enabled"):
+        raise ValueError(
+            "XDRIVE: в конфиге нет включённого mux — транспорт без "
+            "мультиплексирования не работает. Выберите другой конфиг."
+        )
+    try:
+        concurrency = int(mux.get("concurrency", 0))
+    except (TypeError, ValueError):
+        concurrency = 0
+    if concurrency < 0:
+        raise ValueError(
+            "XDRIVE: mux.concurrency < 0 отключает мультиплексирование — "
+            "транспорт без него не работает. Выберите другой конфиг."
+        )
+    try:
+        xudp = int(mux.get("xudpConcurrency", 0))
+    except (TypeError, ValueError):
+        xudp = 0
+    if xudp < 0:
+        raise ValueError(
+            "XDRIVE: mux.xudpConcurrency < 0 отключает мультиплексирование — "
+            "транспорт без него не работает. Выберите другой конфиг."
+        )
+    if str(mux.get("xudpProxyUDP443") or "").lower() == "skip":
+        raise ValueError(
+            'XDRIVE: mux.xudpProxyUDP443="skip" несовместим с транспортом. '
+            "Выберите другой конфиг."
+        )
+
+    if xdrive_encryption_missing(config):
+        logger.warning(
+            "XDRIVE: VLESS encryption не задан — трафик в бакете не шифруется "
+            "(нужен ключ из `xray vlessenc`)"
+        )
+
+    if not isinstance(ob["streamSettings"].get("xdriveSettings"), dict):
+        logger.warning(
+            "XDRIVE: нет streamSettings.xdriveSettings — "
+            "ядру нечего поднимать (нужен service/remoteFolder)"
+        )
+
+    return config
+
+    return config
+
+
 PROXY_INBOUND_PROTOS = frozenset({"socks", "http", "mixed"})
 
 

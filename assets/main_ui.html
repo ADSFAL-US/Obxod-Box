@@ -335,6 +335,19 @@
   .picker-tag.warn    { background: #6b3a1a; color: #ffb06b; }
   .picker-tag.info    { background: #2b3a5a; color: #8ab4f8; }
   .picker-tag.count   { background: #1f2d1f; color: #86efac; }
+  /* XDRIVE — новый транспорт, подсвечиваем его отдельным градиентом. */
+  .picker-tag.xdrive {
+    background: linear-gradient(135deg, #7c3aed 0%, #06b6d4 100%);
+    color: #fff;
+    box-shadow: 0 0 8px rgba(124, 58, 237, 0.55);
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+  }
+  /* Конфиг без шифрования на уровне транспорта — предупреждаем явно. */
+  .picker-tag.insecure {
+    background: #7a1f1f;
+    color: #ff9b9b;
+    border: 1px solid #b33;
+  }
 
   .picker-arrow {
     flex-shrink: 0;
@@ -1078,7 +1091,7 @@
 
   <div class="modal-overlay" id="proxyWarningModal">
     <div class="modal-content">
-      <h3>Небезопасный прокси</h3>
+      <h3>Небезопасное подключение</h3>
       <div class="diag-summary" id="proxyWarningText"></div>
       <div class="modal-actions">
         <button class="btn-cancel" onclick="cancelProxyWarning()">Отмена</button>
@@ -1760,6 +1773,7 @@
       const t = String(tag || '').toLowerCase();
       if (t === 'tls') return 'tls';
       if (t === 'reality') return 'reality';
+      if (t === 'xdrive') return 'xdrive';
       if (t === 'none' || t === '') return 'warn';
       if (t === 'json' || t === 'link') return 'info';
       return '';
@@ -1767,14 +1781,22 @@
 
     function buildTags(cfg) {
       const tags = [];
+      const transport = String(cfg.transport || '').toLowerCase();
       if (cfg.protocol)  tags.push(cfg.protocol);
       if (cfg.transport) tags.push(cfg.transport);
       if (cfg.type)      tags.push(cfg.type);
-      if (cfg.security)  tags.push(cfg.security);
-      return tags.map(t => {
+      // XDRIVE: TLS внутри бакета не применяется и в настройках транспорта
+      // не описывается — тег security для него не показываем вообще.
+      if (cfg.security && transport !== 'xdrive') tags.push(cfg.security);
+      const html = tags.map(t => {
         const cls = tagClass(t);
         return `<span class="picker-tag ${cls}">${escapeHtml(t)}</span>`;
       }).join('');
+      // Шифрование на уровне транспорта отсутствует — конфиг небезопасен.
+      const insecure = cfg.insecure
+        ? `<span class="picker-tag insecure" title="Нет шифрования на уровне транспорта">небезопасно</span>`
+        : '';
+      return html + insecure;
     }
 
     function pingClass(ms) {

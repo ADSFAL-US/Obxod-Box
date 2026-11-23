@@ -1962,6 +1962,27 @@ class MainWindow:
         )
         await self._push_js_safe(js)
 
+    @staticmethod
+    def _config_insecure_warning(record: dict) -> str | None:
+        """Предупреждение, если xdrive-конфиг идёт без шифрования.
+
+        XDRIVE ходит в бакет, поэтому TLS тут ни при чём: байты внутри
+        хранилища защищает VLESS ``encryption``. Без него трафик лежит
+        открытым — предлагаем выбрать другой конфиг.
+        """
+        from net_utils import xdrive_encryption_missing
+
+        raw = record.get("raw")
+        if not isinstance(raw, dict):
+            return None
+        if not xdrive_encryption_missing(raw):
+            return None
+        return (
+            "В этом конфиге XDRIVE нет шифрования на уровне транспорта: "
+            "трафик внутри бакета не защищён. Лучше выбрать другой конфиг, "
+            "если это возможно. Подключиться всё равно?"
+        )
+
     async def _handle_regenerate_proxy_password(self) -> None:
         self.config.regenerate_proxy_password()
         logger.info("Сгенерирован новый пароль прокси")
@@ -2002,6 +2023,11 @@ class MainWindow:
                     if warning:
                         logger.info("Toggle: показано предупреждение о прокси")
                         await self._show_proxy_warning(warning)
+                        return
+                    config_warning = self._config_insecure_warning(record)
+                    if config_warning:
+                        logger.info("Toggle: показано предупреждение о конфиге")
+                        await self._show_proxy_warning(config_warning)
                         return
 
                 logger.info("Toggle: запускаю Xray с конфигом id=%s", record["id"])
@@ -2178,6 +2204,7 @@ class MainWindow:
                 "protocol": meta.get("protocol"),
                 "transport": meta.get("transport"),
                 "security": meta.get("security"),
+                "insecure": bool(meta.get("insecure")),
                 "index": meta.get("index"),
             })
 
@@ -2612,6 +2639,8 @@ class MainWindow:
 
     @staticmethod
     def _extract_metadata_from_xray(cfg: dict, index: int) -> dict:
+        from net_utils import xdrive_encryption_missing
+
         meta = {
             "index": index,
             "name": cfg.get("remarks") or cfg.get("name") or f"Config #{index}",
@@ -2631,10 +2660,14 @@ class MainWindow:
             if target:
                 meta["protocol"] = (target.get("protocol") or "?").lower()
                 stream = target.get("streamSettings") or {}
-                net = (stream.get("network") or "tcp").lower()
+                net = (stream.get("network") or stream.get("method") or "tcp").lower()
                 meta["transport"] = net
                 sec = (stream.get("security") or "none").lower()
-                meta["security"] = sec or "none"
+                # XDRIVE: TLS внутри бакета не применяется и в настройках
+                # транспорта не описывается — тег security не показываем.
+                meta["security"] = "" if net == "xdrive" else (sec or "none")
+                if net == "xdrive":
+                    meta["insecure"] = xdrive_encryption_missing(cfg)
         except Exception as exc:
             logger.debug("_extract_metadata_from_xray: %s", exc)
         return meta
@@ -2659,9 +2692,15 @@ class MainWindow:
                 meta["protocol"] = "vmess"
                 if obj.get("ps"):
                     meta["name"] = obj["ps"]
-                meta["transport"] = (obj.get("net") or "tcp").lower()
+                net = (obj.get("net") or "tcp").lower()
+                meta["transport"] = net
                 sec = (obj.get("tls") or "").lower()
-                meta["security"] = sec if sec else "none"
+                # XDRIVE: TLS внутри бакета не применяется — не показываем.
+                meta["security"] = "" if net == "xdrive" else (sec if sec else "none")
+                if net == "xdrive":
+                    meta["insecure"] = str(obj.get("encryption") or "").lower() in (
+                        "", "none"
+                    )
                 return meta
 
             parsed = urlparse(link)
@@ -2669,8 +2708,16 @@ class MainWindow:
             if parsed.fragment:
                 meta["name"] = unquote(parsed.fragment)
             qs = parse_qs(parsed.query)
-            meta["transport"] = (qs.get("type", ["tcp"])[0] or "tcp").lower()
-            meta["security"] = (qs.get("security", ["none"])[0] or "none").lower()
+            net = (qs.get("type", ["tcp"])[0] or "tcp").lower()
+            meta["transport"] = net
+            sec = (qs.get("security", ["none"])[0] or "none").lower()
+            # XDRIVE: TLS внутри бакета не применяется — не показываем.
+            meta["security"] = "" if net == "xdrive" else sec
+            if net == "xdrive":
+                meta["insecure"] = (
+                    str(qs.get("encryption", ["none"])[0] or "none").lower()
+                    in ("", "none")
+                )
         except Exception as exc:
             logger.debug("_extract_metadata_from_link: %s", exc)
         return meta

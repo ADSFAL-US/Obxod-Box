@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import secrets
 from pathlib import Path
 from typing import Any
 
@@ -22,12 +24,33 @@ DEFAULTS: dict[str, Any] = {
     "network_watch_interval": 2,
     "network_auto_reconnect": True,
     "network_restart_on_iface_change": True,
+    # ── Локальный прокси ──
+    # Пароль генерируется при первом запуске и хранится в app-config.json.
+    "proxy_auth_enabled": True,
+    "proxy_username": "obxod",
+    "proxy_password": "",
+    "proxy_listen": "127.0.0.1",
     # ── Пинг конфигов ──
     "ping_url": "https://www.gstatic.com/generate_204",
     "ping_timeout": 5,
     "ping_concurrency": 8,
+    # Метод: http (GET через туннель), tcp (TCP через туннель), icmp (до сервера).
+    "ping_method": "http",
+    # Что учитывать в замере: response (только обмен по прогретому пути)
+    # или handshake (установка соединения + запрос).
+    "ping_measure": "response",
+    # Что отдавать как итог: median / mean / max.
+    "ping_aggregate": "median",
+    "ping_warmup": True,
+    "ping_warmup_count": 3,
+    "ping_samples": 5,
+    # Порог зелёного для оценки сервера (score в UI).
+    "ping_green_ms": 120,
+    "ping_green_jitter_ms": 40,
     # ── роутинг ──
-    "routing_set": "RU-auto-routing",
+    # По умолчанию пресет не выбран: встроенный RU-auto-routing — лишь
+    # пример для собственных правил, а не обязательное поведение.
+    "routing_set": None,
     # ── автообновления ──
     "auto_update_enabled": True,
     # ── онбординг первого запуска ──
@@ -56,7 +79,10 @@ class Config:
                 merged[key] = file_data[key]
 
         self._validate(merged)
+        need_save = self._ensure_proxy_credentials(merged)
         self._data = merged
+        if need_save:
+            self.save()
 
     def save(self) -> None:
         try:
@@ -66,6 +92,11 @@ class Config:
                 json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
                 encoding="utf-8",
             )
+            if os.name != "nt":
+                try:
+                    os.chmod(self._path, 0o600)
+                except OSError:
+                    pass
             logger.info("Конфигурация сохранена в %s", self._path)
         except OSError as exc:
             logger.error("Не удалось сохранить конфиг %s: %s", self._path, exc)
@@ -95,3 +126,48 @@ class Config:
         if mode is not None and mode not in VALID_MODES:
             logger.warning("В конфиге недопустимый mode=%r. Будет использован дефолт.", mode)
             data["mode"] = DEFAULTS["mode"]
+
+    @staticmethod
+    def _generate_proxy_password() -> str:
+        return secrets.token_urlsafe(18)
+
+    def _ensure_proxy_credentials(self, data: dict[str, Any]) -> bool:
+        """Гарантирует наличие валидных логина/пароля/адреса прокси."""
+        changed = False
+
+        username = data.get("proxy_username")
+        if (
+            not isinstance(username, str)
+            or not username.strip()
+            or len(username) > 64
+            or any(ord(c) < 32 for c in username)
+        ):
+            data["proxy_username"] = DEFAULTS["proxy_username"]
+            changed = True
+
+        password = data.get("proxy_password")
+        if (
+            not isinstance(password, str)
+            or len(password) < 8
+            or len(password) > 256
+            or any(ord(c) < 32 for c in password)
+        ):
+            data["proxy_password"] = self._generate_proxy_password()
+            changed = True
+
+        if data.get("proxy_listen") not in ("127.0.0.1", "0.0.0.0"):
+            data["proxy_listen"] = DEFAULTS["proxy_listen"]
+            changed = True
+
+        if not isinstance(data.get("proxy_auth_enabled"), bool):
+            data["proxy_auth_enabled"] = DEFAULTS["proxy_auth_enabled"]
+            changed = True
+
+        return changed
+
+    def regenerate_proxy_password(self) -> str:
+        """Генерирует новый пароль, сохраняет конфиг и возвращает его."""
+        password = self._generate_proxy_password()
+        self._data["proxy_password"] = password
+        self.save()
+        return password

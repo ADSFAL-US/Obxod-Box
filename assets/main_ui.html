@@ -214,6 +214,18 @@
   .active-ping.good { color: #4ade80; border-color: #2a4a34; }
   .active-ping.mid  { color: #fbbf24; border-color: #4a3d1e; }
   .active-ping.bad  { color: #ef4444; border-color: #4a2222; }
+  .active-ping .ap-text { display: block; }
+  .active-ping .ap-bar {
+    display: block;
+    height: 3px;
+    margin-top: 3px;
+    border-radius: 2px;
+    background: #4a4a4a;
+    transition: background 0.2s, width 0.2s;
+  }
+  .active-ping.good .ap-bar { background: #4ade80; }
+  .active-ping.mid  .ap-bar { background: #fbbf24; }
+  .active-ping.bad  .ap-bar { background: #ef4444; }
 
   .picker-list {
     position: absolute;
@@ -276,6 +288,26 @@
     text-overflow: ellipsis;
     line-height: 1.15;
   }
+  /* Эмодзи-флаги и молнии заменяются на инлайн-SVG (assets/flags.js). */
+  .ob-flag {
+    display: inline-block;
+    width: 1.15em;
+    height: 1.15em;
+    vertical-align: -0.18em;
+    margin-right: 0.25em;
+    border-radius: 50%;
+    overflow: hidden;
+    box-shadow: 0 0 0 1px rgba(255,255,255,0.18);
+  }
+  .ob-flag svg { display: block; width: 100%; height: 100%; }
+  .ob-bolt {
+    display: inline-block;
+    width: 1em;
+    height: 1em;
+    vertical-align: -0.15em;
+    margin: 0 0.1em;
+  }
+  .ob-bolt svg { display: block; width: 100%; height: 100%; fill: #fbbf24; }
   .picker-tags {
     flex: 0 0 auto;
     display: flex;
@@ -303,6 +335,19 @@
   .picker-tag.warn    { background: #6b3a1a; color: #ffb06b; }
   .picker-tag.info    { background: #2b3a5a; color: #8ab4f8; }
   .picker-tag.count   { background: #1f2d1f; color: #86efac; }
+  /* XDRIVE — новый транспорт, подсвечиваем его отдельным градиентом. */
+  .picker-tag.xdrive {
+    background: linear-gradient(135deg, #7c3aed 0%, #06b6d4 100%);
+    color: #fff;
+    box-shadow: 0 0 8px rgba(124, 58, 237, 0.55);
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+  }
+  /* Конфиг без шифрования на уровне транспорта — предупреждаем явно. */
+  .picker-tag.insecure {
+    background: #7a1f1f;
+    color: #ff9b9b;
+    border: 1px solid #b33;
+  }
 
   .picker-arrow {
     flex-shrink: 0;
@@ -377,7 +422,8 @@
     transition: background 0.3s ease;
   }
   .status-dot.running  { background: #4ade80; box-shadow: 0 0 6px #4ade80; }
-  .status-dot.starting { background: #fbbf24; animation: pulse 1s infinite; }
+  .status-dot.starting,
+  .status-dot.stopping { background: #fbbf24; animation: pulse 1s infinite; }
   .status-dot.error    { background: #ef4444; }
   .status-dot.network_down { background: #fbbf24; animation: pulse 1.5s infinite; }
   @keyframes pulse {
@@ -437,6 +483,95 @@
   .btn-cancel:hover { background: #666; }
   .btn-submit { background: #6c5ce7; color: #fff; }
   .btn-submit:hover { background: #5a4bcf; }
+
+  /* ── Диагностика сети ─────────────────────────────────────────── */
+  #diagModal,
+  #proxyWarningModal { z-index: 400; }
+  .diag-content {
+    width: clamp(300px, 82vw, 540px);
+    max-height: 82vh;
+    overflow: hidden;
+  }
+  .diag-summary {
+    font-size: 13px;
+    line-height: 1.45;
+    color: #cfcfcf;
+    white-space: pre-wrap;
+  }
+  .diag-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-height: 46vh;
+    overflow-y: auto;
+    padding-right: 2px;
+  }
+  .diag-list::-webkit-scrollbar { width: 6px; }
+  .diag-list::-webkit-scrollbar-thumb { background: #555; border-radius: 3px; }
+  .diag-issue {
+    background: #2f2f2f;
+    border: 1px solid #4a4a4a;
+    border-left: 4px solid #fbbf24;
+    border-radius: 10px;
+    padding: 10px 12px;
+  }
+  .diag-issue.error { border-left-color: #ef4444; }
+  .diag-issue-title {
+    font-size: 13px;
+    font-weight: 700;
+    color: #fff;
+    margin-bottom: 4px;
+  }
+  .diag-issue-detail {
+    font-size: 12px;
+    color: #bbb;
+    line-height: 1.4;
+    word-wrap: break-word;
+  }
+  .diag-issue-suggestion {
+    font-size: 12px;
+    color: #8ab4f8;
+    line-height: 1.4;
+    margin-top: 5px;
+  }
+  .diag-issue-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 8px;
+  }
+  .diag-issue-actions button,
+  .diag-actions button {
+    padding: 6px 12px;
+    border-radius: 7px;
+    border: none;
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: background 0.2s;
+  }
+  .diag-btn-kill { background: #7f2b2b; color: #fff; }
+  .diag-btn-kill:hover { background: #a33636; }
+  .diag-btn-remove { background: #7a4a12; color: #ffd9a0; }
+  .diag-btn-remove:hover { background: #9a5f18; }
+  .diag-btn-issue { background: #2b3a5a; color: #9dc0ff; }
+  .diag-btn-issue:hover { background: #34486e; }
+  .diag-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 4px;
+  }
+  .diag-actions button {
+    padding: 8px 16px;
+    font-size: 14px;
+  }
+  .toggle-wrapper.busy .toggle-segment {
+    pointer-events: none;
+    opacity: 0.65;
+    cursor: default;
+  }
 
   .toggle-wrapper {
     position: absolute;
@@ -663,6 +798,21 @@
     color: #888;
     line-height: 1.4;
     margin: 4px 0 8px;
+  }
+  .settings-hint.warn { color: #fbbf24; }
+  .settings-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin: 10px 0 4px;
+  }
+  .settings-actions button {
+    padding: 8px 14px;
+    border-radius: 8px;
+    border: none;
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
   }
 
   .settings-value {
@@ -925,6 +1075,31 @@
     </div>
   </div>
 
+  <div class="modal-overlay" id="diagModal">
+    <div class="modal-content diag-content">
+      <h3 id="diagTitle">Диагностика сети</h3>
+      <div class="diag-summary" id="diagSummary"></div>
+      <div class="diag-list" id="diagList"></div>
+      <div class="diag-actions" id="diagActions">
+        <button class="btn-submit" id="diagReconnect" style="display:none"
+                onclick="reconnectFromDiagnostics()">Переподключиться</button>
+        <button class="btn-cancel" onclick="closeDiagnostics()">Закрыть</button>
+        <button class="btn-cancel" onclick="retryDiagnostics()">Проверить снова</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="proxyWarningModal">
+    <div class="modal-content">
+      <h3>Небезопасное подключение</h3>
+      <div class="diag-summary" id="proxyWarningText"></div>
+      <div class="modal-actions">
+        <button class="btn-cancel" onclick="cancelProxyWarning()">Отмена</button>
+        <button class="btn-submit" onclick="continueProxyWarning()">Всё равно подключиться</button>
+      </div>
+    </div>
+  </div>
+
   <div class="toggle-wrapper">
       <div class="toggle-track">
         <div class="toggle-segment" data-mode="tun">TUN</div>
@@ -1019,6 +1194,7 @@
         <div class="settings-tab active" data-tab="xray">Xray</div>
         <div class="settings-tab" data-tab="routing">Маршрутизация</div>
         <div class="settings-tab" data-tab="network">Сеть</div>
+        <div class="settings-tab" data-tab="proxy">Прокси</div>
         <div class="settings-tab" data-tab="ping">Пинг</div>
         <div class="settings-tab" data-tab="updates">Обновления</div>
         <div class="settings-tab" data-tab="about">О приложении</div>
@@ -1097,6 +1273,49 @@
           </div>
         </div>
 
+        <div class="settings-page" data-page="proxy">
+          <h3>Прокси</h3>
+          <div class="settings-section">
+            <div class="settings-item">
+              <label for="setProxyListen">Адрес прослушивания</label>
+              <select id="setProxyListen">
+                <option value="127.0.0.1">127.0.0.1 — только этот ПК</option>
+                <option value="0.0.0.0">0.0.0.0 — доступен по сети</option>
+              </select>
+            </div>
+
+            <div class="settings-item">
+              <label for="setProxyAuth">Требовать логин и пароль</label>
+              <label class="switch">
+                <input type="checkbox" id="setProxyAuth">
+                <span></span>
+              </label>
+            </div>
+
+            <div class="settings-item">
+              <label for="setProxyUsername">Логин</label>
+              <input type="text" id="setProxyUsername" maxlength="64"
+                     autocomplete="off" spellcheck="false">
+            </div>
+
+            <div class="settings-item">
+              <label for="setProxyPassword">Пароль</label>
+              <input type="text" id="setProxyPassword" maxlength="256"
+                     autocomplete="off" spellcheck="false">
+            </div>
+
+            <div class="settings-actions">
+              <button type="button" class="btn-cancel"
+                      onclick="regenerateProxyPassword()">Сгенерировать новый пароль</button>
+            </div>
+
+            <div class="settings-hint" id="proxyHint"></div>
+            <div class="settings-hint" id="proxyApplyHint">
+              Изменения прокси применятся при следующем подключении.
+            </div>
+          </div>
+        </div>
+
         <div class="settings-page" data-page="ping">
           <h3>Пинг</h3>
           <div class="settings-section">
@@ -1113,6 +1332,74 @@
             <div class="settings-item">
               <label for="setPingConcurrency">Одновременных пингов</label>
               <input type="number" id="setPingConcurrency" min="1" max="20" step="1">
+            </div>
+          </div>
+
+          <h3>Расширенные настройки</h3>
+          <div class="settings-section">
+            <div class="settings-item">
+              <label for="setPingMethod">Метод</label>
+              <select id="setPingMethod">
+                <option value="http">HTTP GET через туннель</option>
+                <option value="tcp">TCP-соединение через туннель</option>
+                <option value="icmp">ICMP echo (ping) до сервера</option>
+              </select>
+            </div>
+
+            <div class="settings-item">
+              <label for="setPingMeasure">Что учитывать в замере</label>
+              <select id="setPingMeasure">
+                <option value="response">Только обмен по прогретому туннелю</option>
+                <option value="handshake">Установку соединения + запрос</option>
+              </select>
+            </div>
+
+            <div class="settings-item">
+              <label for="setPingAggregate">Итоговое значение</label>
+              <select id="setPingAggregate">
+                <option value="median">Медиана</option>
+                <option value="mean">Среднее</option>
+                <option value="max">Максимум</option>
+              </select>
+            </div>
+
+            <div class="settings-item">
+              <label for="setPingWarmup">Прогревать туннель</label>
+              <label class="switch">
+                <input type="checkbox" id="setPingWarmup">
+                <span></span>
+              </label>
+            </div>
+
+            <div class="settings-item">
+              <label for="setPingWarmupCount">Запросов для прогрева</label>
+              <input type="number" id="setPingWarmupCount" min="0" max="20" step="1">
+            </div>
+
+            <div class="settings-item">
+              <label for="setPingSamples">Запросов для теста</label>
+              <input type="number" id="setPingSamples" min="1" max="20" step="1">
+            </div>
+
+            <div class="settings-item">
+              <label for="setPingGreenMs">Порог зелёного пинга (мс)</label>
+              <input type="number" id="setPingGreenMs" min="5" max="1000" step="1">
+            </div>
+
+            <div class="settings-item">
+              <label for="setPingGreenJitter">Порог зелёного джиттера (мс)</label>
+              <input type="number" id="setPingGreenJitter" min="5" max="1000" step="1">
+            </div>
+
+            <div class="settings-hint">
+              Скор сервера = (пинг_пик / порог пинга + джиттер / порог джиттера) / 2.
+              До 1 — зелёный, до 1.5 — жёлтый, выше — красный. Пинг_пик —
+              второй по величине замер, поэтому одиночный выброс не красит
+              сервер. Если пришли не все запросы — сервер всегда красный.
+            </div>
+            <div class="settings-hint" id="pingMethodHint">
+              HTTP GET идёт через туннель. TCP и ICMP меряют сеть напрямую
+              до адреса сервера из конфига (URL для них не используется).
             </div>
           </div>
         </div>
@@ -1361,6 +1648,28 @@
     // для ObxodCube (клик по кубу)
     window.sendToPython = sendToPython;
 
+    let uiBusy = false;
+
+    function applyUiBusy(busy) {
+      uiBusy = !!busy;
+      const wrapper = document.querySelector('.toggle-wrapper');
+      if (wrapper) wrapper.classList.toggle('busy', uiBusy);
+    }
+
+    // Куб сообщает о внутренней оптимистичной блокировке (включая timeout).
+    window.obxodUiBusyChanged = applyUiBusy;
+
+    // Единая блокировка куба/тоггла на время ответа ядра.
+    window.setUiBusy = function(busy, label) {
+      applyUiBusy(busy);
+      if (window.ObxodCube && window.ObxodCube.setBusy) {
+        window.ObxodCube.setBusy(uiBusy);
+      }
+      if (uiBusy && label && window.ObxodCube) {
+        window.ObxodCube.setStatus('starting', label);
+      }
+    };
+
     window.addEventListener('keydown', function(e) {
       if (e.key === 'F5' && !e.ctrlKey && !e.shiftKey && !e.altKey) {
         e.preventDefault();
@@ -1375,8 +1684,12 @@
         segment.classList.add('active');
       }
       segment.addEventListener('click', function() {
+        if (uiBusy || this.classList.contains('active')) return;
+        const wasRunning = window.ObxodCube &&
+          window.ObxodCube.getStatus() === 'running';
         segments.forEach(s => s.classList.remove('active'));
         this.classList.add('active');
+        window.setUiBusy(true, wasRunning ? 'Переключение режима...' : '');
         sendToPython({ action: "set_mode", mode: this.dataset.mode });
       });
     });
@@ -1438,6 +1751,7 @@
 
     let pingResults = {};
     let pingBusy = false;
+    let pingThresholds = { greenMs: 120, greenJitterMs: 40 };
 
     function escapeHtml(s) {
       const div = document.createElement('div');
@@ -1445,10 +1759,21 @@
       return div.innerHTML;
     }
 
+    // Имена конфигов часто начинаются с эмодзи-флага страны или молнии.
+    // WebView2 на Windows рисует их как «RU»/квадратики, поэтому подменяем
+    // на инлайн-SVG (assets/flags.js). Без модуля — обычный escape.
+    function renderName(text) {
+      if (window.ObxodFlags && window.ObxodFlags.renderName) {
+        return window.ObxodFlags.renderName(text);
+      }
+      return escapeHtml(text);
+    }
+
     function tagClass(tag) {
       const t = String(tag || '').toLowerCase();
       if (t === 'tls') return 'tls';
       if (t === 'reality') return 'reality';
+      if (t === 'xdrive') return 'xdrive';
       if (t === 'none' || t === '') return 'warn';
       if (t === 'json' || t === 'link') return 'info';
       return '';
@@ -1456,14 +1781,22 @@
 
     function buildTags(cfg) {
       const tags = [];
+      const transport = String(cfg.transport || '').toLowerCase();
       if (cfg.protocol)  tags.push(cfg.protocol);
       if (cfg.transport) tags.push(cfg.transport);
       if (cfg.type)      tags.push(cfg.type);
-      if (cfg.security)  tags.push(cfg.security);
-      return tags.map(t => {
+      // XDRIVE: TLS внутри бакета не применяется и в настройках транспорта
+      // не описывается — тег security для него не показываем вообще.
+      if (cfg.security && transport !== 'xdrive') tags.push(cfg.security);
+      const html = tags.map(t => {
         const cls = tagClass(t);
         return `<span class="picker-tag ${cls}">${escapeHtml(t)}</span>`;
       }).join('');
+      // Шифрование на уровне транспорта отсутствует — конфиг небезопасен.
+      const insecure = cfg.insecure
+        ? `<span class="picker-tag insecure" title="Нет шифрования на уровне транспорта">небезопасно</span>`
+        : '';
+      return html + insecure;
     }
 
     function pingClass(ms) {
@@ -1471,6 +1804,41 @@
       if (ms < 300) return 'good';
       if (ms < 800) return 'mid';
       return 'bad';
+    }
+
+    // Скор сервера: сравнивает пинг и джиттер с порогами зелёного.
+    // Полные (все запросы пришли) — по формуле; неполные — всегда «красные».
+    // score = (peak / green_ms + jitter / green_jitter) / 2
+    // peak — второй по величине замер: одиночный выброс не красит сервер.
+    function scorePing(res) {
+      if (!res || typeof res !== 'object' || !res.ms) return null;
+      const sent = res.sent || 0;
+      const received = res.received || 0;
+      const complete = sent > 0 && received >= sent;
+      if (!complete) return { score: Infinity, color: 'bad', complete: false };
+
+      const greenMs = pingThresholds.greenMs || 120;
+      const greenJit = pingThresholds.greenJitterMs || 40;
+      const peak = res.peak || res.max || res.ms;
+      const score = ((peak / greenMs) + ((res.jitter || 0) / greenJit)) / 2;
+
+      let color = 'good';
+      if (score > 1.5) color = 'bad';
+      else if (score > 1) color = 'mid';
+      return { score: score, color: color, complete: true };
+    }
+
+    function pingDisplay(res) {
+      // Возвращает {cls, txt} для списка/индикатора.
+      if (res == null) return { cls: 'bad', txt: '×' };
+      const s = scorePing(res);
+      const cls = s ? s.color : pingClass(res.ms);
+      const got = res.received;
+      const sent = res.sent;
+      const count = (typeof got === 'number' && typeof sent === 'number')
+        ? `${got}/${sent}` : '';
+      const txt = `${res.ms} ms` + (count ? ` · ${count}` : '');
+      return { cls: cls, txt: txt };
     }
 
     function renderProviderCard() {
@@ -1488,7 +1856,7 @@
 
       if (activeProvider) {
         const p = providers.find(x => x.name === activeProvider);
-        nameEl.textContent = activeProvider;
+        nameEl.innerHTML = renderName(activeProvider);
         tagsEl.innerHTML = p
           ? `<span class="picker-tag count">${p.count}</span>`
           : '';
@@ -1513,7 +1881,7 @@
 
       if (selectedConfigIndex >= 0 && selectedConfigIndex < configs.length) {
         const sel = configs[selectedConfigIndex];
-        nameEl.textContent = sel.name || ('Config #' + selectedConfigIndex);
+        nameEl.innerHTML = renderName(sel.name || ('Config #' + selectedConfigIndex));
         tagsEl.innerHTML = buildTags(sel);
       } else {
         nameEl.textContent = 'Выберите конфиг';
@@ -1531,7 +1899,7 @@
           item.className = 'picker-item' + (p.name === activeProvider ? ' selected' : '');
           item.innerHTML = `
             <div class="picker-info">
-              <div class="picker-name">${escapeHtml(p.name)}</div>
+              <div class="picker-name">${renderName(p.name)}</div>
               <div class="picker-tags"><span class="picker-tag info">${p.count} шт.</span></div>
             </div>
           `;
@@ -1544,19 +1912,20 @@
           item.className = 'picker-item' + (i === selectedConfigIndex ? ' selected' : '');
 
           const has = Object.prototype.hasOwnProperty.call(pingResults, i);
-          const ms  = has ? pingResults[i] : undefined;
+          const res = has ? pingResults[i] : undefined;
           let cls, txt;
           if (!has) {
             cls = 'unknown'; txt = '—';
-          } else if (ms == null) {
+          } else if (res == null) {
             cls = 'bad'; txt = '×';
           } else {
-            cls = pingClass(ms); txt = ms + ' ms';
+            const disp = pingDisplay(res);
+            cls = disp.cls; txt = disp.txt;
           }
 
           item.innerHTML = `
             <div class="picker-info">
-              <div class="picker-name">${escapeHtml(cfg.name || ('Config #' + i))}</div>
+              <div class="picker-name">${renderName(cfg.name || ('Config #' + i))}</div>
               <div class="picker-tags">${buildTags(cfg)}</div>
             </div>
             <div class="picker-ping ${cls}">${txt}</div>
@@ -1595,10 +1964,13 @@
     function chooseConfig(index) {
       index = Number(index);
       if (!Number.isFinite(index)) return;
+      const wasRunning = window.ObxodCube &&
+        window.ObxodCube.getStatus() === 'running';
       selectedConfigIndex = index | 0;
       closePicker();
       renderConfigCard();
       updateActivePing();
+      window.setUiBusy(true, wasRunning ? 'Переключение конфига...' : '');
       sendToPython({ action: "select_config", index: selectedConfigIndex });
     }
 
@@ -1658,6 +2030,152 @@
       alert("Ошибка импорта: " + errorMsg);
     };
 
+    // ── Диагностика сети ─────────────────────────────────────────
+    function diagNode(tag, className, text) {
+      const el = document.createElement(tag);
+      if (className) el.className = className;
+      if (text != null) el.textContent = String(text);
+      return el;
+    }
+
+    function openDiagnosticsModal() {
+      closeSettings();
+      closePicker();
+      document.getElementById('diagModal').style.display = 'flex';
+    }
+
+    window.closeDiagnostics = function() {
+      document.getElementById('diagModal').style.display = 'none';
+    };
+
+    window.retryDiagnostics = function() {
+      const summary = document.getElementById('diagSummary');
+      const list = document.getElementById('diagList');
+      if (summary) summary.textContent = 'Проверяю сетевой стек...';
+      if (list) list.innerHTML = '';
+      document.getElementById('diagReconnect').style.display = 'none';
+      sendToPython({ action: "run_diagnostics" });
+    };
+
+    window.reconnectFromDiagnostics = function() {
+      window.closeDiagnostics();
+      if (window.ObxodCube && window.ObxodCube.requestToggle) {
+        // Снимаем возможную блокировку и запускаем тот же оптимистичный
+        // путь, что и клик по кубу: анимация + блокировка + запрос в ядро.
+        window.ObxodCube.setBusy(false);
+        window.ObxodCube.requestToggle();
+        return;
+      }
+      sendToPython({ action: "toggle_connection" });
+    };
+
+    window.killDiagProcess = function(pid) {
+      const summary = document.getElementById('diagSummary');
+      if (summary) summary.textContent = 'Завершаю процесс и повторяю проверку...';
+      sendToPython({ action: "kill_conflict_process", pid: pid });
+    };
+
+    window.removeDiagInterface = function(device) {
+      if (!device) return;
+      const summary = document.getElementById('diagSummary');
+      if (summary) summary.textContent = 'Удаляю интерфейс и повторяю проверку...';
+      sendToPython({ action: "remove_conflict_interface", device: device });
+    };
+
+    window.openDiagIssue = function(url) {
+      if (!url) return;
+      sendToPython({ action: "open_url", url: url });
+    };
+
+    window.showDiagnosticsError = function(message) {
+      const summary = document.getElementById('diagSummary');
+      if (summary) summary.textContent = message || 'Не удалось выполнить действие';
+      openDiagnosticsModal();
+    };
+
+    window.showDiagnostics = function(data) {
+      data = data || {};
+      const issues = Array.isArray(data.issues) ? data.issues : [];
+      if (!issues.length) {
+        window.closeDiagnostics();
+        return;
+      }
+
+      document.getElementById('diagTitle').textContent = 'Диагностика сети';
+      document.getElementById('diagReconnect').style.display = 'none';
+
+      const hasError = issues.some(i => i && i.severity === 'error');
+      let summary = data.summary;
+      if (!summary) {
+        if (!hasError) {
+          summary = 'Подключение работает, но найдены потенциальные конфликты.';
+        } else if (data.traffic_ok) {
+          summary = 'Трафик проходит, но в сетевом стеке есть проблемы.';
+        } else {
+          summary = 'Обнаружены проблемы, из-за которых трафик может не проходить.';
+        }
+      }
+      document.getElementById('diagSummary').textContent = summary;
+
+      const list = document.getElementById('diagList');
+      list.innerHTML = '';
+      issues.forEach(issue => {
+        const card = diagNode('div', 'diag-issue ' + (issue.severity || 'warning'));
+        card.appendChild(diagNode('div', 'diag-issue-title', issue.title || 'Проблема'));
+        if (issue.detail) {
+          card.appendChild(diagNode('div', 'diag-issue-detail', issue.detail));
+        }
+        if (issue.suggestion) {
+          card.appendChild(diagNode('div', 'diag-issue-suggestion', '→ ' + issue.suggestion));
+        }
+
+        const actions = diagNode('div', 'diag-issue-actions');
+        const procs = Array.isArray(issue.processes) ? issue.processes.slice() : [];
+        if (!procs.length && issue.pid) {
+          procs.push({ pid: issue.pid, name: issue.process_name || 'процесс' });
+        }
+        procs.forEach(function(proc) {
+          if (!proc || !proc.pid) return;
+          const killBtn = diagNode(
+            'button', 'diag-btn-kill',
+            'Завершить ' + (proc.name || 'процесс')
+          );
+          killBtn.onclick = function() { window.killDiagProcess(proc.pid); };
+          actions.appendChild(killBtn);
+        });
+        const extra = Array.isArray(issue.actions) ? issue.actions : [];
+        extra.forEach(function(item) {
+          if (!item || item.action !== 'remove_interface' || !item.device) return;
+          const btn = diagNode(
+            'button', 'diag-btn-remove',
+            item.label || 'Удалить интерфейс'
+          );
+          btn.onclick = function() { window.removeDiagInterface(item.device); };
+          actions.appendChild(btn);
+        });
+        if (issue.issue_url) {
+          const issueBtn = diagNode('button', 'diag-btn-issue', 'Сообщить в Issues');
+          issueBtn.onclick = function() { window.openDiagIssue(issue.issue_url); };
+          actions.appendChild(issueBtn);
+        }
+        if (actions.childElementCount) card.appendChild(actions);
+        list.appendChild(card);
+      });
+
+      openDiagnosticsModal();
+    };
+
+    window.showConnectionLost = function(message, title) {
+      document.getElementById('diagTitle').textContent = title || 'Соединение разорвано';
+      document.getElementById('diagSummary').textContent =
+        (message || 'Соединение с Xray неожиданно завершилось.') +
+        '\n\nПереподключитесь или запустите проверку сети.';
+      document.getElementById('diagList').innerHTML = '';
+      const reconnect = document.getElementById('diagReconnect');
+      reconnect.style.display = '';
+      openDiagnosticsModal();
+    };
+
     function startPing(e) {
       if (e) e.stopPropagation();
       if (pingBusy) return;
@@ -1677,8 +2195,8 @@
       if (pickerMode === 'config') renderList();
     };
 
-    window.setPingResult = function(index, ms) {
-      pingResults[index] = ms;
+    window.setPingResult = function(index, res) {
+      pingResults[index] = res;
       if (pickerMode === 'config') renderList();
       updateActivePing();
     };
@@ -1689,18 +2207,30 @@
       const has = Object.prototype.hasOwnProperty.call(pingResults, selectedConfigIndex);
       if (selectedConfigIndex < 0 || !has) {
         el.classList.remove('visible', 'good', 'mid', 'bad');
+        el.innerHTML = '';
         return;
       }
-      const ms = pingResults[selectedConfigIndex];
+      const res = pingResults[selectedConfigIndex];
       el.classList.add('visible');
       el.classList.remove('good', 'mid', 'bad');
-      if (ms == null) {
+      if (res == null) {
         el.classList.add('bad');
-        el.textContent = '×';
-      } else {
-        el.classList.add(pingClass(ms));
-        el.textContent = ms + ' ms';
+        el.innerHTML = '<span class="ap-text">×</span>';
+        return;
       }
+      const disp = pingDisplay(res);
+      el.classList.add(disp.cls);
+      const jitter = (typeof res.jitter === 'number') ? ` · j ${Math.round(res.jitter)}` : '';
+      el.innerHTML =
+        `<span class="ap-text">${disp.txt}${jitter}</span>` +
+        `<span class="ap-bar"></span>`;
+    }
+
+    function updatePingThresholdsFromSettings(cfg) {
+      const ms = Number(cfg && cfg.ping_green_ms);
+      const jit = Number(cfg && cfg.ping_green_jitter_ms);
+      if (Number.isFinite(ms) && ms > 0) pingThresholds.greenMs = ms;
+      if (Number.isFinite(jit) && jit > 0) pingThresholds.greenJitterMs = jit;
     }
 
     function openSettings() {
@@ -1769,6 +2299,18 @@
       ping_url:                       [['setPingUrl', 'url']],
       ping_timeout:                   [['setPingTimeout', 'int']],
       ping_concurrency:               [['setPingConcurrency', 'int']],
+      ping_method:                    [['setPingMethod', 'value']],
+      ping_measure:                   [['setPingMeasure', 'value']],
+      ping_aggregate:                 [['setPingAggregate', 'value']],
+      ping_warmup:                    [['setPingWarmup', 'checked']],
+      ping_warmup_count:              [['setPingWarmupCount', 'int0']],
+      ping_samples:                   [['setPingSamples', 'int']],
+      ping_green_ms:                  [['setPingGreenMs', 'int']],
+      ping_green_jitter_ms:           [['setPingGreenJitter', 'int']],
+      proxy_listen:                   [['setProxyListen', 'value']],
+      proxy_auth_enabled:             [['setProxyAuth', 'checked']],
+      proxy_username:                 [['setProxyUsername', 'value']],
+      proxy_password:                 [['setProxyPassword', 'value']],
     };
 
     function applySettingValue(key, value) {
@@ -1789,9 +2331,14 @@
             let value;
             if (kind === 'checked') value = el.checked;
             else if (kind === 'int') value = parseInt(el.value, 10);
+            else if (kind === 'int0') value = parseInt(el.value, 10);
             else value = el.value.trim();
 
             if (kind === 'int' && (!Number.isFinite(value) || value < 1)) {
+              el.focus();
+              return;
+            }
+            if (kind === 'int0' && (!Number.isFinite(value) || value < 0)) {
               el.focus();
               return;
             }
@@ -1801,6 +2348,13 @@
             }
             applySettingValue(key, value);
             sendSetting(key, value);
+            if (key === 'proxy_listen' || key === 'proxy_auth_enabled') {
+              updateProxyHint();
+            }
+            if (key.startsWith('ping_')) {
+              renderList();
+              updateActivePing();
+            }
           });
         });
       });
@@ -1838,6 +2392,57 @@
       });
     }
 
+    function updateProxyHint() {
+      const listenEl = document.getElementById('setProxyListen');
+      const authEl = document.getElementById('setProxyAuth');
+      const listen = listenEl ? listenEl.value : '127.0.0.1';
+      const auth = authEl ? authEl.checked : true;
+
+      let text = '';
+      if (!auth) {
+        text = 'Внимание: прокси без пароля. Любой, кто видит порт, может им пользоваться.';
+      }
+      if (listen === '0.0.0.0') {
+        text += (text ? ' ' : '') +
+          'Прокси доступен другим устройствам в локальной сети.';
+      }
+      if (!text) {
+        text = 'Прокси слушает только этот компьютер и требует логин/пароль.';
+      }
+
+      const hint = document.getElementById('proxyHint');
+      if (hint) {
+        hint.textContent = text;
+        hint.classList.toggle('warn', !auth || listen === '0.0.0.0');
+      }
+    }
+
+    function regenerateProxyPassword() {
+      sendToPython({ action: "regenerate_proxy_password" });
+    }
+
+    window.showProxyWarning = function(message) {
+      const el = document.getElementById('proxyWarningText');
+      if (el) el.textContent = message || 'Прокси настроен небезопасно.';
+      document.getElementById('proxyWarningModal').style.display = 'flex';
+    };
+
+    function closeProxyWarning() {
+      document.getElementById('proxyWarningModal').style.display = 'none';
+    }
+
+    function cancelProxyWarning() {
+      closeProxyWarning();
+      if (window.ObxodCube) window.ObxodCube.setBusy(false);
+      window.setUiBusy(false);
+      sendToPython({ action: "cancel_toggle" });
+    }
+
+    function continueProxyWarning() {
+      closeProxyWarning();
+      sendToPython({ action: "toggle_connection", force_insecure: true });
+    }
+
     window.setRoutingSets = function(sets, active) {
       ['qRoutingSet', 'setRoutingSet'].forEach(id => {
         const el = document.getElementById(id);
@@ -1873,6 +2478,20 @@
       applySettingValue('ping_url',                        cfg.ping_url || '');
       applySettingValue('ping_timeout',                    cfg.ping_timeout ?? 5);
       applySettingValue('ping_concurrency',                cfg.ping_concurrency ?? 8);
+      applySettingValue('ping_method',                     cfg.ping_method || 'http');
+      applySettingValue('ping_measure',                    cfg.ping_measure || 'response');
+      applySettingValue('ping_aggregate',                  cfg.ping_aggregate || 'median');
+      applySettingValue('ping_warmup',                     cfg.ping_warmup !== false);
+      applySettingValue('ping_warmup_count',               cfg.ping_warmup_count ?? 3);
+      applySettingValue('ping_samples',                    cfg.ping_samples ?? 5);
+      applySettingValue('ping_green_ms',                   cfg.ping_green_ms ?? 120);
+      applySettingValue('ping_green_jitter_ms',            cfg.ping_green_jitter_ms ?? 40);
+      updatePingThresholdsFromSettings(cfg);
+      applySettingValue('proxy_listen',                    cfg.proxy_listen || '127.0.0.1');
+      applySettingValue('proxy_auth_enabled',              cfg.proxy_auth_enabled !== false);
+      applySettingValue('proxy_username',                  cfg.proxy_username || 'obxod');
+      applySettingValue('proxy_password',                  cfg.proxy_password || '');
+      updateProxyHint();
 
       const rs = document.getElementById('setRoutingSet');
       if (rs && rs.options.length > 0) {

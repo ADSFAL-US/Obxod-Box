@@ -30,6 +30,7 @@ class TrayCallbacks:
 class TrayBackend(Protocol):
     def install(self) -> bool: ...
     def dispose(self) -> None: ...
+    def notify(self, title: str, message: str) -> None: ...
     @property
     def installed(self) -> bool: ...
 
@@ -48,6 +49,9 @@ class NoOpTray:
 
     def dispose(self) -> None:
         self._installed = False
+
+    def notify(self, title: str, message: str) -> None:
+        logger.debug("Tray notify (no-op): %s — %s", title, message)
 
     @property
     def installed(self) -> bool:
@@ -142,6 +146,17 @@ class WinFormsTray:
                 menu.Dispose()
             except Exception as exc:
                 logger.debug("dispose: %s", exc)
+
+    def notify(self, title: str, message: str) -> None:
+        tray = self._tray
+        if tray is None:
+            return
+        try:
+            from System.Windows.Forms import ToolTipIcon  # type: ignore
+            tray.ShowBalloonTip(5000, title, message, ToolTipIcon.Warning)
+            logger.info("Tray notify: %s — %s", title, message)
+        except Exception as exc:
+            logger.debug("tray notify failed: %s", exc)
 
     @property
     def installed(self) -> bool:
@@ -337,6 +352,24 @@ class LinuxTray:
                 logger.debug("dispose: %s", exc)
             self._status_icon = None
         self._menu = None
+
+    def notify(self, title: str, message: str) -> None:
+        try:
+            import shutil
+            import subprocess
+
+            if not shutil.which("notify-send"):
+                return
+            # Popen, а не run: уведомление не должно блокировать event loop.
+            subprocess.Popen(
+                ["notify-send", title, message],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            logger.info("Tray notify: %s — %s", title, message)
+        except Exception as exc:
+            logger.debug("tray notify failed: %s", exc)
 
     @property
     def installed(self) -> bool:

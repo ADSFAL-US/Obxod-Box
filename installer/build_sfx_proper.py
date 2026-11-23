@@ -48,14 +48,26 @@ class SevenZipSFXBuilder:
         # These are downloaded/created on first run per .buildignore rules.
         # Root-level .py modules are picked up automatically so a new module can never
         # be silently left out of the installer payload.
+        #
+        # Исключение — встроенные пресеты маршрутизации: это примеры, с которых
+        # пользователь начинает свой набор. Остальное в cfg/ (app-config.json,
+        # providers/, x-ray_conf.json) — пользовательские данные, их в payload нет.
+        builtin_presets = sorted(
+            str(p.relative_to(self.source_dir)).replace("\\", "/")
+            for p in (self.source_dir / "cfg" / "routing").glob("*.json")
+            if p.is_file()
+        )
         items = sorted(
             p.name for p in self.source_dir.glob("*.py") if p.is_file()
         ) + [
             "start.bat", "start.sh", "requirements.txt", "assets",
-        ]
+        ] + builtin_presets
         skip = {"__pycache__",".pyc",".pyo",".pyd",".venv","venv","build","build-bundle",
             ".git",".idea",".vscode","logs",".log","mkbuild.ps1",".buildignore",
             "bin","cfg","geo","runtime"}  # Explicitly exclude these dirs
+        # "cfg" стоит в skip, поэтому пресеты маршрутизации нужно вытащить
+        # из-под подстрочной проверки: их пути разрешены явно.
+        always_keep = set(builtin_presets)
         with zipfile.ZipFile(payload_path, 'w', zipfile.ZIP_DEFLATED, 9) as zf:
             for it in items:
                 ip = self.source_dir / it
@@ -66,10 +78,11 @@ class SevenZipSFXBuilder:
                     for f in ip.rglob("*"):
                         if f.is_file():
                             rel = f.relative_to(self.source_dir)
-                            if any(s in str(rel) for s in skip):
+                            rel_s = str(rel).replace('\\', '/')
+                            if rel_s not in always_keep and any(s in str(rel) for s in skip):
                                 continue
-                            zf.write(f, str(rel).replace('\\', '/'))
-                            print(f"  + {rel}")
+                            zf.write(f, rel_s)
+                            print(f"  + {rel_s}")
         print(f"Payload: {payload_path} ({payload_path.stat().st_size/1024/1024:.1f} MB)")
         return payload_path
 

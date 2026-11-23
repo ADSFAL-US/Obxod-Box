@@ -31,7 +31,7 @@ _VIRTUAL_HINTS = (
     "tap-windows", "tap-win32", "openvpn", "wintun",
     "hyper-v", "vethernet", "vmware", "virtualbox", "vbox",
     "loopback", "bluetooth", "wan miniport", "npcap",
-    "docker", "teredo", "isatap", "wi-fi direct",
+    "docker", "teredo", "isatap", "pseudo", "псевдо", "6to4", "wi-fi direct",
     "br-", "veth", "virbr", "docker0", "cni", "flannel",
     "kube", "calico",
     "tun", "tap", "wg", "zt", "tailscale0",

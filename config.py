@@ -48,7 +48,9 @@ DEFAULTS: dict[str, Any] = {
     "ping_green_ms": 120,
     "ping_green_jitter_ms": 40,
     # ── роутинг ──
-    "routing_set": "RU-auto-routing",
+    # По умолчанию пресет не выбран: встроенный RU-auto-routing — лишь
+    # пример для собственных правил, а не обязательное поведение.
+    "routing_set": None,
     # ── автообновления ──
     "auto_update_enabled": True,
     # ── онбординг первого запуска ──
